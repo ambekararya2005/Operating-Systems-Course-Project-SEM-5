@@ -26,6 +26,26 @@ admin ──SHUTDOWN (camp --shutdown) or SIGTERM (reliefctl stop)────�
 - Each camp's simulated clock starts when that camp starts, so a restarted camp replays its rows from
   minute 0. The `arrival` field always carries the scenario's simulated minute.
 
+## Signals (Phase 1, `src/camp/main.c`, `scripts/reliefctl`)
+| Signal  | Sender | Camp behaviour |
+|---------|--------|----------------|
+| SIGUSR1 | `reliefctl alert <id\|all>` | Evacuation alert. The next 5 requests are sent as CRITICAL with `flags=REQ_FLAG_ALERT` and the original severity in `orig_severity`. reliefd logs `alert=1 orig_severity=...` |
+| SIGUSR2 | `reliefctl dump <id\|all>` | Logs `event=status` with the sent count, counts by severity, escalations, alerts, queue-full retries, rows left and uptime |
+| SIGTERM / SIGINT | reliefd shutdown, `reliefctl stop` | Finishes the send in progress (up to 3 more attempts), sends BYE and exits 0 |
+
+- Handlers only set `volatile sig_atomic_t` flags. `service_signals()` does the work in the main flow,
+  before each request, when a sleep is interrupted, and on every send retry. printf, malloc and the
+  logger (which takes a mutex) are not async-signal-safe, so they must never run inside a handler.
+- The camp uses SA_RESTART, so an `mq_timedsend` waiting for queue space resumes after a signal
+  (this is how the current send gets finished). `clock_nanosleep` and `sigsuspend` are never
+  restarted, so an idle camp still wakes immediately. The resident wait blocks all four signals
+  between checking the flags and `sigsuspend()`, which closes the lost-wakeup race.
+- reliefd uses no SA_RESTART on its own handlers: it wants EINTR so it can collect exited camps promptly.
+- An alert applies to requests sent after the camp's main flow sees it. A request already inside
+  `mq_timedsend` when SIGUSR1 arrives goes out unescalated.
+- reliefctl gets pids from `$RELIEF_HOME/camps.pids`, which reliefd rewrites atomically
+  (write a temp file, then `rename(2)`). It only signals pids whose parent is reliefd.
+
 ## Camp process lifecycle (Phase 1, `src/reliefd/camps.c`)
 ```
 fork+execv ──▶ STARTING ──HELLO──▶ RUNNING ──exit(n)──────────────▶ EXITED

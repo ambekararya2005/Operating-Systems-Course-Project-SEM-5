@@ -155,9 +155,11 @@ static int handle_message(const relief_msg_t *m, camp_table_t *camps, stats_t *s
         EV_INFO("bye", "camp=%u camp_pid=%d", m->camp_id, m->camp_pid);
         return 0;
     case MSG_REQUEST:
-        EV_INFO("request", "id=%u camp=%u camp_pid=%d severity=%s resource=%s qty=%u service=%u arrival=%u",
+        EV_INFO("request", "id=%u camp=%u camp_pid=%d severity=%s resource=%s qty=%u service=%u "
+                "arrival=%u alert=%d orig_severity=%s",
                 r->id, r->camp_id, r->camp_pid, relief_severity_name(r->severity),
-                relief_resource_name(r->resource), r->quantity, r->service_time, r->arrival);
+                relief_resource_name(r->resource), r->quantity, r->service_time, r->arrival,
+                (r->flags & REQ_FLAG_ALERT) ? 1 : 0, relief_severity_name(r->orig_severity));
         return 0;
     case MSG_SHUTDOWN:
         EV_INFO("shutdown_request", "from_pid=%d", m->camp_pid);
@@ -265,6 +267,8 @@ int main(int argc, char **argv)
     if (!home || !*home)
         home = RELIEF_HOME_DEFAULT;
     if ((size_t)snprintf(pidpath, sizeof pidpath, "%s/%s", home, RELIEF_PID_FILE) >= sizeof pidpath ||
+        (size_t)snprintf(camps.pids_path, sizeof camps.pids_path, "%s/%s", home,
+                         RELIEF_CAMPS_PIDS) >= sizeof camps.pids_path ||
         (size_t)snprintf(logdir, sizeof logdir, "%s/%s", home, RELIEF_LOG_DIR) >= sizeof logdir ||
         (size_t)snprintf(logpath, sizeof logpath, "%s/%s", logdir, RELIEF_LOG_FILE) >= sizeof logpath) {
         LOG_ERROR("RELIEF_HOME path too long");
@@ -325,6 +329,7 @@ int main(int argc, char **argv)
     EV_INFO("daemon_start", "queue=%s home=%s camps=%zu scenario=%s seed=%lu time_scale_ms=%lu",
             RELIEF_MQ_NAME, home, camps.n, camps.scenario, camps.seed, camps.time_scale_ms);
     camps_spawn_all(&camps);
+    camps_save(&camps);
 
     /* Main loop. SIGCHLD/SIGTERM interrupt mq_timedreceive (EINTR), so reaping and
      * shutdown happen promptly; the 500 ms timeout bounds the check-then-block race. */
@@ -335,6 +340,8 @@ int main(int argc, char **argv)
             g_child = 0;            /* clear before reaping so no SIGCHLD is lost */
             camps_reap(&camps, 0);
         }
+        if (camps.dirty)
+            camps_save(&camps);     /* keep camps.pids current for reliefctl alert/dump */
         r = receive_one(mq, RECV_TIMEOUT_MS, &camps, &st);
         if (r == RECV_ERROR) {
             rc = EXIT_FAILURE;
@@ -353,6 +360,7 @@ int main(int argc, char **argv)
 
     /* Terminate camps: SIGTERM, grace period (keep draining the queue so camps
      * blocked on mq_send can deliver BYE), then SIGKILL and a blocking reap. */
+    camps_unpublish(&camps);    /* camps are going away: no more alert/dump targets */
     camps_terminate_all(&camps);
     for (long end = monotonic_ms() + SHUTDOWN_GRACE_MS;
          camps_live(&camps) > 0 && monotonic_ms() < end;) {

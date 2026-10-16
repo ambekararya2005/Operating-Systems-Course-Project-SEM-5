@@ -3,6 +3,7 @@
  */
 #include "log.h"
 
+#include <errno.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -67,12 +68,37 @@ static void timestamp(char *buf, size_t len)
     snprintf(buf, len, "%s.%03d", sec, (int)(ts.tv_nsec / 1000000L) % 1000);
 }
 
-/* Write one line to both sinks. Caller holds g_log_lock. */
+static void write_all(int fd, const char *buf, size_t len)
+{
+    while (len > 0) {
+        ssize_t n = write(fd, buf, len);
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            return;
+        }
+        buf += n;
+        len -= (size_t)n;
+    }
+}
+
+/* Write one line to both sinks. Caller holds g_log_lock.
+ * The stderr line is formatted first and emitted with a single write(2): reliefd and all
+ * camps share one O_APPEND log file, and one write per line keeps their lines from
+ * interleaving (stdio may split an unbuffered fprintf into several writes). */
 static void emit_locked(log_level_t level, const char *stamp, const char *human, const char *kv)
 {
-    fprintf(stderr, "%s %-5s %s[%d] %s\n", stamp, g_level_upper[level], g_component,
-            (int)getpid(), human);
-    fflush(stderr);
+    char line[LOG_LINE_MAX + 128];
+    int n = snprintf(line, sizeof line, "%s %-5s %s[%d] %s\n", stamp, g_level_upper[level],
+                     g_component, (int)getpid(), human);
+
+    if (n < 0)
+        return;
+    if ((size_t)n >= sizeof line) {     /* truncated: keep the newline */
+        n = (int)sizeof line - 1;
+        line[n - 1] = '\n';
+    }
+    write_all(STDERR_FILENO, line, (size_t)n);
     if (g_file) {
         fprintf(g_file, "ts=%s level=%s comp=%s pid=%d %s\n", stamp, g_level_lower[level],
                 g_component, (int)getpid(), kv);

@@ -128,6 +128,7 @@ static void camp_spawn(camp_table_t *t, camp_t *c)
         EV_ERROR("camp_spawn_failed", "camp=%u name=%s errno=%d", c->id, c->name, errno);
         c->state = CAMP_CRASHED;
         c->pid = 0;
+        t->dirty = 1;
         return;
     }
     if (pid == 0) {
@@ -146,6 +147,7 @@ static void camp_spawn(camp_table_t *t, camp_t *c)
 
     c->pid = pid;
     c->state = CAMP_STARTING;
+    t->dirty = 1;
     c->started = time(NULL);
     clock_gettime(CLOCK_MONOTONIC, &c->started_mono);
     EV_INFO("camp_spawn", "camp=%u name=%s pid=%d restarts=%u", c->id, c->name, (int)pid,
@@ -172,6 +174,7 @@ void camps_on_hello(camp_table_t *t, uint32_t id, pid_t pid)
     camp_t *c = find_by_pid(t, pid);
     if (c && c->id == id && c->state == CAMP_STARTING) {
         c->state = CAMP_RUNNING;
+        t->dirty = 1;
         EV_INFO("camp_running", "camp=%u name=%s pid=%d", c->id, c->name, (int)pid);
     }
 }
@@ -186,6 +189,7 @@ static void on_child_exit(camp_table_t *t, pid_t pid, int status)
         return;
     }
     c->wait_status = status;
+    t->dirty = 1;
 
     if (WIFEXITED(status)) {
         int code = WEXITSTATUS(status);
@@ -233,6 +237,41 @@ void camps_reap(camp_table_t *t, int block)
             LOG_ERROR("waitpid: %s", strerror(errno));
         return;     /* 0: nothing more to reap now; ECHILD: no children left */
     }
+}
+
+int camps_save(camp_table_t *t)
+{
+    char tmp[CAMPS_PATH_MAX + 8];
+    FILE *f;
+
+    t->dirty = 0;
+    if (!t->pids_path[0])
+        return 0;
+    if ((size_t)snprintf(tmp, sizeof tmp, "%s.tmp", t->pids_path) >= sizeof tmp)
+        return -1;
+    f = fopen(tmp, "we");
+    if (!f) {
+        LOG_ERROR("cannot write %s: %s", tmp, strerror(errno));
+        return -1;
+    }
+    fprintf(f, "# ReliefOS camp table, rewritten by reliefd pid %d on every change\n"
+               "# id pid state name\n", (int)getpid());
+    for (size_t i = 0; i < t->n; i++) {
+        const camp_t *c = &t->camps[i];
+        fprintf(f, "%u %d %s %s\n", c->id, (int)c->pid, camp_state_name(c->state), c->name);
+    }
+    if (fclose(f) != 0 || rename(tmp, t->pids_path) == -1) {   /* rename(2) is atomic */
+        LOG_ERROR("cannot publish %s: %s", t->pids_path, strerror(errno));
+        unlink(tmp);
+        return -1;
+    }
+    return 0;
+}
+
+void camps_unpublish(camp_table_t *t)
+{
+    if (t->pids_path[0] && unlink(t->pids_path) == -1 && errno != ENOENT)
+        LOG_WARN("unlink %s: %s", t->pids_path, strerror(errno));
 }
 
 size_t camps_live(const camp_table_t *t)

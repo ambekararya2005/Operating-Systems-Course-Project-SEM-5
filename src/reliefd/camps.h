@@ -44,6 +44,8 @@ typedef struct {
     unsigned long seed;
     unsigned long time_scale_ms;    /* real ms per simulated minute, passed to camps */
     int           shutting_down;    /* no restarts once set */
+    int           dirty;            /* table changed since the last camps_save() */
+    char          pids_path[CAMPS_PATH_MAX];   /* $RELIEF_HOME/camps.pids, "" = don't publish */
 } camp_table_t;
 
 const char *camp_state_name(camp_state_t s);
@@ -60,6 +62,13 @@ void camps_on_hello(camp_table_t *t, uint32_t id, pid_t pid);
 /* Reap exited children with waitpid(-1, WNOHANG) (or blocking until ECHILD if block != 0),
  * update the table and restart crashed camps. */
 void camps_reap(camp_table_t *t, int block);
+
+/* Publish the table to pids_path as "<id> <pid> <state> <name>" lines, atomically
+ * (write a temp file, then rename over the old one). Clears dirty. Returns 0 or -1. */
+int camps_save(camp_table_t *t);
+
+/* Remove the published table (on shutdown, once camps are no longer controllable). */
+void camps_unpublish(camp_table_t *t);
 
 /* Number of camps with a live process (STARTING or RUNNING). */
 size_t camps_live(const camp_table_t *t);

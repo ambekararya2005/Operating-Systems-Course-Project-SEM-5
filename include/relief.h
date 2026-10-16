@@ -18,6 +18,7 @@
 #define RELIEF_PID_FILE     "reliefd.pid"
 #define RELIEF_LOG_DIR      "logs"          /* under $RELIEF_HOME */
 #define RELIEF_LOG_FILE     "reliefd.log"   /* structured key=value log */
+#define RELIEF_CAMPS_PIDS   "camps.pids"    /* camp table for reliefctl: "<id> <pid> <state> <name>" */
 
 /* Request ids are camp_id * RELIEF_REQ_ID_BASE + sequence, so they are unique and reproducible. */
 #define RELIEF_REQ_ID_BASE  1000000U
@@ -47,6 +48,9 @@ typedef enum {
     MSG_SHUTDOWN = 4
 } relief_msg_kind_t;
 
+/* relief_request_t.flags */
+#define REQ_FLAG_ALERT      0x01    /* escalated to CRITICAL by an evacuation alert (SIGUSR1) */
+
 /* One rescue/supply request; times are in simulated minutes. */
 typedef struct {
     uint32_t id;
@@ -57,6 +61,9 @@ typedef struct {
     uint16_t quantity;
     uint32_t service_time;
     uint32_t arrival;
+    uint8_t  flags;         /* REQ_FLAG_* */
+    uint8_t  orig_severity; /* severity before any escalation */
+    uint16_t _pad;
 } relief_request_t;
 
 /* Fixed-size message placed on the queue. */
@@ -72,6 +79,7 @@ typedef struct {
 } relief_msg_t;
 
 _Static_assert(sizeof(relief_msg_t) == RELIEF_MSG_SIZE, "relief_msg_t must be fixed-size");
+_Static_assert(sizeof(relief_request_t) == 28, "relief_request_t layout changed: update all senders");
 
 static inline const char *relief_severity_name(unsigned s)
 {

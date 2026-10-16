@@ -1,6 +1,6 @@
 # ReliefOS build. Binaries go to $(BUILD)/ (default build/).
 #   make            build reliefd and camp
-#   make test       tests/smoke.sh (IPC), tests/camps.sh (process supervision), tests/traffic.sh (paced traffic)
+#   make test       tests/{smoke,camps,traffic,signals}.sh: IPC, supervision, paced traffic, signals
 #   make tsan       ThreadSanitizer build in build/tsan/ + tests
 #   make valgrind   tests with reliefd and camps under valgrind
 #   make run        run reliefd in the foreground (RELIEF_HOME=./run)
@@ -23,7 +23,7 @@ CAMP_SRC    := src/camp/main.c $(COMMON_SRC)
 RELIEFD_OBJ := $(RELIEFD_SRC:%.c=$(OBJ)/%.o)
 CAMP_OBJ    := $(CAMP_SRC:%.c=$(OBJ)/%.o)
 
-TESTS := tests/smoke.sh tests/camps.sh tests/traffic.sh
+TESTS := tests/smoke.sh tests/camps.sh tests/traffic.sh tests/signals.sh
 
 # --trace-children: camps exec'd by reliefd also run under valgrind.
 VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
