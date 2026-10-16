@@ -42,6 +42,7 @@ typedef struct {
     char          camp_bin[CAMPS_PATH_MAX];
     char          scenario[CAMPS_PATH_MAX];
     unsigned long seed;
+    unsigned long time_scale_ms;    /* real ms per simulated minute, passed to camps */
     int           shutting_down;    /* no restarts once set */
 } camp_table_t;
 

@@ -111,14 +111,16 @@ int camps_load(camp_table_t *t, const char *conf_path)
 /* fork + execv one camp. On failure the camp is marked CRASHED. */
 static void camp_spawn(camp_table_t *t, camp_t *c)
 {
-    char id_arg[16], seed_arg[24];
+    char id_arg[16], seed_arg[24], scale_arg[24];
     pid_t parent = getpid();
     pid_t pid;
 
     snprintf(id_arg, sizeof id_arg, "%u", c->id);
     snprintf(seed_arg, sizeof seed_arg, "%lu", t->seed);
+    snprintf(scale_arg, sizeof scale_arg, "%lu", t->time_scale_ms);
     char *const argv[] = {
-        t->camp_bin, "--id", id_arg, "--seed", seed_arg, "--scenario", t->scenario, NULL
+        t->camp_bin, "--id", id_arg, "--seed", seed_arg, "--scenario", t->scenario,
+        "--time-scale", scale_arg, NULL
     };
 
     pid = fork();

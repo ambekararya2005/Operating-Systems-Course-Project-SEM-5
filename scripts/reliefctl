@@ -7,6 +7,7 @@
 #   RELIEF_WRAP     optional command prefix for reliefd, e.g. "strace -f -o trace.txt"
 #   RELIEF_CAMPS    camps config     (default: <repo>/scenarios/camps.conf)
 #   RELIEF_SCENARIO scenario CSV     (default: <repo>/scenarios/flood_pune.csv)
+#   RELIEF_TIME_SCALE  real ms per simulated minute (default: 100; 0 = no pacing)
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -18,6 +19,7 @@ BIN_DIR=${RELIEF_BIN_DIR:-$ROOT/build}
 read -r -a WRAP <<< "${RELIEF_WRAP:-}"
 CAMPS=${RELIEF_CAMPS:-$ROOT/scenarios/camps.conf}
 SCENARIO=${RELIEF_SCENARIO:-$ROOT/scenarios/flood_pune.csv}
+TIME_SCALE=${RELIEF_TIME_SCALE:-100}
 PIDFILE="$RELIEF_HOME/reliefd.pid"
 LOGDIR="$RELIEF_HOME/logs"
 OUTFILE="$LOGDIR/reliefd.out"     # raw stderr of reliefd and its camps
@@ -58,6 +60,7 @@ cmd_start() {
     rm -f "$PIDFILE"
     mkdir -p "$LOGDIR"
     nohup "${WRAP[@]}" "$BIN_DIR/reliefd" --camps "$CAMPS" --scenario "$SCENARIO" \
+        --time-scale "$TIME_SCALE" \
         >>"$OUTFILE" 2>&1 </dev/null &
     for _ in $(seq 50); do
         if pid=$(daemon_pid); then

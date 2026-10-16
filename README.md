@@ -14,7 +14,8 @@ working demo of the OS syllabus.
 **Status:** Phase 1 (foundation) in progress. `reliefd` is the parent of all camp processes. It
 fork/execs one camp per line of `scenarios/camps.conf`, reaps them on SIGCHLD, restarts crashed
 camps, and shuts them all down cleanly. Camps send their scenario requests over a POSIX message
-queue. No scheduling or resource algorithms are implemented yet.
+queue, each at its arrival time on a simulated clock (1 simulated minute = 100 ms by default).
+No scheduling or resource algorithms are implemented yet.
 
 ## Components
 - `reliefd`: the coordinator daemon (C11, pthreads)
@@ -32,7 +33,8 @@ sudo apt install build-essential valgrind shellcheck
 ## Build, run, test
 ```sh
 make                 # builds build/reliefd and build/camp
-make test            # tests/smoke.sh (IPC, reliefctl) + tests/camps.sh (fork/exec, restarts, no zombies)
+make test            # tests/smoke.sh (IPC, reliefctl), tests/camps.sh (fork/exec, restarts, no zombies),
+                     # tests/traffic.sh (200-row paced replay, queue-full retries)
 make tsan            # ThreadSanitizer build (build/tsan/) + tests
 make valgrind        # tests under valgrind (camps too)
 make clean
@@ -44,9 +46,22 @@ scripts/reliefctl start                    # reliefd + the 8 camps from scenario
 scripts/reliefctl status
 ps --ppid "$(cat run/reliefd.pid)" -o pid,stat,etime,args   # the 8 camp children
 kill -9 <a camp pid>                       # reliefd reaps it and restarts it (max 3 times)
+grep -c 'event=request ' run/logs/reliefd.log   # climbs to 200 over ~36 s (360 simulated minutes)
 grep 'event=camp_' run/logs/reliefd.log    # structured key=value log
 scripts/reliefctl stop                     # SIGTERM camps, SIGKILL stragglers after 2 s, reap all
 ```
+Set `RELIEF_TIME_SCALE=10` to replay the scenario 10x faster (10 ms per simulated minute).
+
+### Scenarios
+`scenarios/flood_pune.csv` holds 200 requests across the 8 camps: 15% CRITICAL, 35% URGENT and 50% ROUTINE,
+with arrivals over 6 simulated hours and a peak in the middle. It is generated, and the same seed gives a
+byte-identical file:
+```sh
+python3 experiments/gen_scenario.py -o scenarios/flood_pune.csv                       # the committed scenario
+python3 experiments/gen_scenario.py --rows 2000 --seed 7 -o scenarios/big.csv         # a bigger one
+RELIEF_SCENARIO=$PWD/scenarios/big.csv scripts/reliefctl start
+```
+
 Runtime files go in `$RELIEF_HOME`, which defaults to `./run`: the pid file, `logs/reliefd.log` (key=value)
 and `logs/reliefd.out` (raw stderr). You never need root.
 
@@ -65,6 +80,7 @@ and `logs/reliefd.out` (raw stderr). You never need root.
 |------|--------|------------------|-------|
 | 1 | Shell programming, modular kernels | `reliefctl`, awk reports, cron, `relief.ko` | 1, 6 |
 | 2 | fork/exec/waitpid, process states/PCB, pthreads | reliefd supervises camp processes (SIGCHLD reaping, restarts); `reliefctl ps` via `/proc` | 1 |
+| 2 | IPC (POSIX message queues) | Camps send paced requests over a bounded queue; mq_timedsend back-pressure | 1 |
 | 2 | FCFS, SJF, RR, Priority, MLFQ with aging; SCHED_FIFO/SCHED_RR/nice | Triage scheduler, experiments E1/E2 | 2 |
 | 3 | Producer-consumer, readers-writers, Peterson's | Warehouse → truck, inventory, two camps / one boat | 3 |
 | 3 | Banker's, wait-for-graph detection + recovery, resource ordering | Deadlock control over trucks/boats | 3 |

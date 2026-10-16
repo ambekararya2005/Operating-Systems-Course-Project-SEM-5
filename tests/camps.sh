@@ -73,14 +73,18 @@ if [[ -e /dev/mqueue/reliefos_requests ]]; then
 fi
 
 # 1. reliefd fork/execs one camp per line of camps.conf.
+# Expected counts come from the scenario itself (--time-scale 0: no pacing, fast test).
+SCENARIO="$ROOT/scenarios/flood_pune.csv"
+TOTAL_ROWS=$(awk 'NR > 1' "$SCENARIO" | wc -l)
+CAMP3_ROWS=$(awk -F, 'NR > 1 && $2 == 3' "$SCENARIO" | wc -l)
 "${WRAP[@]}" "$BIN/reliefd" --camps "$ROOT/scenarios/camps.conf" \
-    --scenario "$ROOT/scenarios/flood_pune.csv" --seed 1 >>"$OUT" 2>&1 &
+    --scenario "$SCENARIO" --seed 1 --time-scale 0 >>"$OUT" 2>&1 &
 DPID=$!
 wait_for "8 camps RUNNING" total_running 8
 [[ $(children) -eq 8 ]] || fail "expected 8 children of reliefd, got $(children)"
 pass "reliefd (pid $DPID) has 8 camp children"
-wait_for "20 scenario requests" requests_at_least "" 20
-pass "camps replayed all 20 scenario rows"
+wait_for "$TOTAL_ROWS scenario requests" requests_at_least "" "$TOTAL_ROWS"
+pass "camps replayed all $TOTAL_ROWS scenario rows"
 
 # 2. kill -9 camp 3: reaped, logged as signaled, restarted; repeat until it is CRASHED.
 for n in 1 2 3; do
@@ -91,7 +95,8 @@ for n in 1 2 3; do
     new=$(camp_pid 3)
     [[ "$new" != "$old" ]] || fail "camp 3 kept pid $old after restart"
     # Let the new camp finish replaying its 4 rows so the message totals are exact.
-    wait_for "camp 3 pid $new replays 4 rows" requests_at_least "camp=3 camp_pid=$new " 4
+    wait_for "camp 3 pid $new replays $CAMP3_ROWS rows" \
+        requests_at_least "camp=3 camp_pid=$new " "$CAMP3_ROWS"
     [[ $(children) -eq 8 ]] || fail "expected 8 children after restart $n, got $(children)"
     [[ $(zombies) -eq 0 ]] || fail "zombie children after restart $n"
     pass "kill -9 camp 3 (pid $old) -> restart $n/3 as pid $new, 8 children, no zombies"
@@ -118,7 +123,9 @@ logged "event=camp_killed camp=5 name=Sangamwadi pid=$stuck signal=KILL" \
     || fail "stuck camp 5 was not SIGKILLed"
 [[ $(count 'event=camp_exit .* status=0 ') -eq 6 ]] || fail "expected 6 clean camp exits (status=0)"
 logged 'event=camp_final camp=3 name=Shivajinagar state=CRASHED restarts=3' || fail "camp 3 not CRASHED"
-logged 'event=daemon_stop hello=11 request=32 bye=6' || fail "wrong message totals"
+# 8 HELLO + 3 from restarts; camp 3 replayed its rows 3 extra times; BYE from the 6 clean exits.
+logged "event=daemon_stop hello=11 request=$((TOTAL_ROWS + 3 * CAMP3_ROWS)) bye=6" \
+    || fail "wrong message totals"
 pass "SIGTERM -> 6 camps exited 0 (BYE sent), stuck camp 5 SIGKILLed after grace period"
 
 for pid in "${spawned[@]}"; do

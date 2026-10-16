@@ -31,6 +31,7 @@
 #define SHUTDOWN_POLL_MS     50
 #define DEFAULT_CAMPS_CONF   "scenarios/camps.conf"
 #define DEFAULT_SCENARIO     "scenarios/flood_pune.csv"
+#define DEFAULT_TIME_SCALE   100     /* ms of real time per simulated minute */
 
 static volatile sig_atomic_t g_stop = 0;     /* signal number that requested shutdown */
 static volatile sig_atomic_t g_child = 0;    /* SIGCHLD seen: reap in the main loop */
@@ -194,12 +195,13 @@ static int receive_one(mqd_t mq, long timeout_ms, camp_table_t *camps, stats_t *
 static void usage(const char *prog)
 {
     fprintf(stderr,
-            "usage: %s [--camps FILE] [--scenario FILE] [--seed N] [--camp-bin PATH]\n"
+            "usage: %s [--camps FILE] [--scenario FILE] [--seed N] [--time-scale MS] [--camp-bin PATH]\n"
             "  --camps     camps config, one \"<id> <name>\" per line (default %s)\n"
             "  --scenario  scenario CSV passed to every camp (default %s)\n"
             "  --seed      seed passed to every camp (default 1)\n"
+            "  --time-scale  real ms per simulated minute for camps (default %d, 0 = no pacing)\n"
             "  --camp-bin  camp executable (default: camp next to reliefd)\n",
-            prog, DEFAULT_CAMPS_CONF, DEFAULT_SCENARIO);
+            prog, DEFAULT_CAMPS_CONF, DEFAULT_SCENARIO, DEFAULT_TIME_SCALE);
 }
 
 int main(int argc, char **argv)
@@ -208,6 +210,7 @@ int main(int argc, char **argv)
         { "camps",    required_argument, NULL, 'c' },
         { "scenario", required_argument, NULL, 's' },
         { "seed",     required_argument, NULL, 'S' },
+        { "time-scale", required_argument, NULL, 't' },
         { "camp-bin", required_argument, NULL, 'b' },
         { "help",     no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
@@ -226,8 +229,9 @@ int main(int argc, char **argv)
 
     log_init("reliefd");
     camps.seed = 1;
+    camps.time_scale_ms = DEFAULT_TIME_SCALE;
 
-    while ((opt = getopt_long(argc, argv, "c:s:S:b:h", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:s:S:t:b:h", opts, NULL)) != -1) {
         char *end;
         switch (opt) {
         case 'c': camps_conf = optarg; break;
@@ -238,6 +242,14 @@ int main(int argc, char **argv)
             camps.seed = strtoul(optarg, &end, 10);
             if (errno || end == optarg || *end) {
                 fprintf(stderr, "invalid --seed: %s\n", optarg);
+                return 2;
+            }
+            break;
+        case 't':
+            errno = 0;
+            camps.time_scale_ms = strtoul(optarg, &end, 10);
+            if (errno || end == optarg || *end || camps.time_scale_ms > 60000) {
+                fprintf(stderr, "invalid --time-scale (0-60000): %s\n", optarg);
                 return 2;
             }
             break;
@@ -310,8 +322,8 @@ int main(int argc, char **argv)
         goto fail_log;
     }
 
-    EV_INFO("daemon_start", "queue=%s home=%s camps=%zu scenario=%s seed=%lu",
-            RELIEF_MQ_NAME, home, camps.n, camps.scenario, camps.seed);
+    EV_INFO("daemon_start", "queue=%s home=%s camps=%zu scenario=%s seed=%lu time_scale_ms=%lu",
+            RELIEF_MQ_NAME, home, camps.n, camps.scenario, camps.seed, camps.time_scale_ms);
     camps_spawn_all(&camps);
 
     /* Main loop. SIGCHLD/SIGTERM interrupt mq_timedreceive (EINTR), so reaping and

@@ -15,6 +15,17 @@ camp ──HELLO / REQUEST* / BYE──▶  /reliefos_requests (POSIX mq)  ─�
 admin ──SHUTDOWN (camp --shutdown) or SIGTERM (reliefctl stop)─────▶ reliefd
 ```
 
+## Camp traffic (Phase 1, `src/camp/main.c`)
+- A camp loads the scenario rows whose `camp_id` matches its `--id` and sorts them by arrival. It then sends
+  each one at `camp start + arrival_min × time_scale_ms`, sleeping with
+  `clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME)`. The absolute deadlines mean no drift, and SIGTERM
+  interrupts the sleep.
+- The queue has 10 slots (the non-root `msg_max`). Every send is an `mq_timedsend` with a 500 ms deadline.
+  On a timeout the camp logs `queue full, retrying` and tries again until stopped. BYE and SHUTDOWN give up
+  after 3 attempts, because reliefd may already be gone.
+- Each camp's simulated clock starts when that camp starts, so a restarted camp replays its rows from
+  minute 0. The `arrival` field always carries the scenario's simulated minute.
+
 ## Camp process lifecycle (Phase 1, `src/reliefd/camps.c`)
 ```
 fork+execv ──▶ STARTING ──HELLO──▶ RUNNING ──exit(n)──────────────▶ EXITED

@@ -16,3 +16,7 @@ experiments/results/
 *.order
 .*.cmd
 .tmp_versions/
+
+# Python bytecode (experiments/)
+__pycache__/
+*.pyc
