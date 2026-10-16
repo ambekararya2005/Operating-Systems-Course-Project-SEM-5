@@ -6,6 +6,7 @@
  *                    camp_id matches --id, each at its arrival time on a simulated clock
  *                    (--time-scale ms of real time per simulated minute, default 100;
  *                    0 = no pacing), then stay resident until SIGTERM/SIGINT, send BYE, exit 0.
+ *                    With --exit-when-done, send BYE and exit 0 as soon as the replay ends.
  *   --count N        (manual/testing) send N random requests (deterministic for --seed
  *                    and --id) immediately, then BYE, and exit.
  * Both send HELLO first. --shutdown instead sends a single SHUTDOWN message (admin/test hook).
@@ -88,7 +89,8 @@ typedef struct {
 static void usage(const char *prog)
 {
     fprintf(stderr,
-            "usage: %s --id N --scenario FILE [--time-scale MS] [--seed S]   (resident until SIGTERM)\n"
+            "usage: %s --id N --scenario FILE [--time-scale MS] [--seed S] [--exit-when-done]\n"
+            "          (resident until SIGTERM, or until the replay ends with --exit-when-done)\n"
             "       %s --id N [--count N] [--seed S]   (send N random requests and exit)\n"
             "       %s --shutdown\n"
             "  --time-scale MS  real milliseconds per simulated minute (default %d, 0 = no pacing)\n"
@@ -508,20 +510,21 @@ int main(int argc, char **argv)
         { "seed",       required_argument, NULL, 's' },
         { "scenario",   required_argument, NULL, 'f' },
         { "time-scale", required_argument, NULL, 't' },
+        { "exit-when-done", no_argument,   NULL, 'x' },
         { "shutdown",   no_argument,       NULL, 'S' },
         { "help",       no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
     static camp_ctx_t camp;
     unsigned long id = 0, count = 5, seed = 1, time_scale = DEFAULT_TIME_SCALE;
-    int have_id = 0, have_count = 0, shutdown_only = 0, opt;
+    int have_id = 0, have_count = 0, shutdown_only = 0, exit_when_done = 0, opt;
     const char *scenario = NULL;
     long sent;
     int rc = EXIT_SUCCESS;
 
     log_init("camp");
 
-    while ((opt = getopt_long(argc, argv, "i:c:s:f:t:Sh", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "i:c:s:f:t:xSh", opts, NULL)) != -1) {
         switch (opt) {
         case 'i':
             if (parse_ulong(optarg, UINT32_MAX / RELIEF_REQ_ID_BASE - 1, &id) == -1 || id == 0) {
@@ -551,6 +554,9 @@ int main(int argc, char **argv)
                 fprintf(stderr, "invalid --time-scale (0-60000 ms per simulated minute): %s\n", optarg);
                 return 2;
             }
+            break;
+        case 'x':
+            exit_when_done = 1;
             break;
         case 'S':
             shutdown_only = 1;
@@ -603,10 +609,14 @@ int main(int argc, char **argv)
     if (sent < 0 && !g_stop)
         rc = EXIT_FAILURE;
 
-    if (scenario && rc == EXIT_SUCCESS) {
-        LOG_INFO("camp %u resident: sent %lu scenario requests, waiting for SIGTERM",
-                 camp.id, camp.sent);
-        wait_for_stop(&camp);
+    if (scenario && rc == EXIT_SUCCESS && !g_stop) {
+        if (exit_when_done) {
+            LOG_INFO("camp %u: replay done (%lu requests), exiting", camp.id, camp.sent);
+        } else {
+            LOG_INFO("camp %u resident: sent %lu scenario requests, waiting for SIGTERM",
+                     camp.id, camp.sent);
+            wait_for_stop(&camp);
+        }
     }
 
     if (send_simple(&camp, MSG_BYE, BYE_MAX_TRIES) == -1 && !g_stop)

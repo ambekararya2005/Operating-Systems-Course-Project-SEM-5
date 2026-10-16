@@ -118,10 +118,21 @@ static void camp_spawn(camp_table_t *t, camp_t *c)
     snprintf(id_arg, sizeof id_arg, "%u", c->id);
     snprintf(seed_arg, sizeof seed_arg, "%lu", t->seed);
     snprintf(scale_arg, sizeof scale_arg, "%lu", t->time_scale_ms);
-    char *const argv[] = {
-        t->camp_bin, "--id", id_arg, "--seed", seed_arg, "--scenario", t->scenario,
-        "--time-scale", scale_arg, NULL
-    };
+    char *argv[12];
+    int argc = 0;
+
+    argv[argc++] = t->camp_bin;
+    argv[argc++] = "--id";
+    argv[argc++] = id_arg;
+    argv[argc++] = "--seed";
+    argv[argc++] = seed_arg;
+    argv[argc++] = "--scenario";
+    argv[argc++] = t->scenario;
+    argv[argc++] = "--time-scale";
+    argv[argc++] = scale_arg;
+    if (t->exit_when_done)
+        argv[argc++] = "--exit-when-done";
+    argv[argc] = NULL;
 
     pid = fork();
     if (pid == -1) {

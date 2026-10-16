@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# OS concept: Shell programming — process control via pid files and signals (Unit 1);
-#             signals as IPC to camp processes: SIGUSR1 alert, SIGUSR2 dump (Unit 2);
+# OS concept: Shell programming — functions, getopts, awk/grep/sed pipelines, exit codes (Unit 1);
+#             process control and the PCB via /proc, signals as IPC to camps (Unit 2);
 #             live status read from POSIX shared memory via reliefstat (Unit 2)
 #
-# reliefctl: control the ReliefOS coordinator daemon.
-#   RELIEF_HOME     runtime directory (default: <repo>/run)
-#   RELIEF_BIN_DIR  directory holding reliefd (default: <repo>/build)
-#   RELIEF_WRAP     optional command prefix for reliefd and reliefstat, e.g. "strace -f -o trace.txt"
-#   RELIEF_CAMPS    camps config     (default: <repo>/scenarios/camps.conf)
-#   RELIEF_SCENARIO scenario CSV     (default: <repo>/scenarios/flood_pune.csv)
+# reliefctl: control and inspect the ReliefOS coordinator daemon.
+#   RELIEF_HOME        runtime directory (default: <repo>/run)
+#   RELIEF_BIN_DIR     directory holding reliefd/reliefstat (default: <repo>/build)
+#   RELIEF_WRAP        optional command prefix for reliefd and reliefstat, e.g. "strace -f -o trace.txt"
+#   RELIEF_CAMPS       camps config  (default: <repo>/scenarios/camps.conf)
+#   RELIEF_SCENARIO    scenario CSV  (default: <repo>/scenarios/flood_pune.csv)
 #   RELIEF_TIME_SCALE  real ms per simulated minute (default: 100; 0 = no pacing)
+#
+# Exit status: 0 success, 1 runtime error (e.g. reliefd not running), 2 usage error.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -25,25 +27,79 @@ TIME_SCALE=${RELIEF_TIME_SCALE:-100}
 PIDFILE="$RELIEF_HOME/reliefd.pid"
 CAMPS_PIDS="$RELIEF_HOME/camps.pids"    # camp table published by reliefd: "<id> <pid> <state> <name>"
 LOGDIR="$RELIEF_HOME/logs"
-OUTFILE="$LOGDIR/reliefd.out"     # raw stderr of reliefd and its camps
-# reliefd itself writes the structured key=value log to $LOGDIR/reliefd.log.
+OUTFILE="$LOGDIR/reliefd.out"           # raw stderr of reliefd and its camps
+EVENTLOG="$LOGDIR/reliefd.log"          # structured key=value log written by reliefd
+PROG=${0##*/}
 
 usage() {
     cat <<EOF
-usage: reliefctl <command>
+usage: $PROG <command> [options]
 
 commands:
-  start      start reliefd and its camps in the background
-             (logs: \$RELIEF_HOME/logs/reliefd.log key=value, reliefd.out raw)
-  stop       stop reliefd (SIGTERM); it stops and reaps all camps
-  status [--json]      reliefd state plus the live camp table from shared memory (reliefstat)
-  alert <camp-id|all>  evacuation alert (SIGUSR1): the camp's next 5 requests become CRITICAL
-  dump  <camp-id|all>  status dump (SIGUSR2): print the camp's counters
-  ps         list camp processes            (coming in Phase 1)
-  simulate   run a scenario through reliefd (coming in Phase 2)
-  report     summarise experiment results   (coming in Phase 2)
+  start                 start reliefd and its camps in the background
+  stop                  stop reliefd (SIGTERM); it stops and reaps all camps
+  status [--json]       reliefd state plus the live camp table from shared memory (reliefstat)
+  ps                    per-process PCB fields from /proc for reliefd and every camp
+  tree                  process tree rooted at reliefd
+  alert <camp-id|all>   evacuation alert (SIGUSR1): the camp's next 5 requests become CRITICAL
+  dump  <camp-id|all>   status dump (SIGUSR2): print the camp's counters
+  report [--since MIN | --last-run]
+                        requests per camp, severity and resource from the structured log
+  simulate flood [--camps N] [--seed S] [--rows R] [--time-scale MS]
+                        generate a scenario, run it to completion (every camp sends BYE),
+                        stop reliefd and print the report
+  help                  this message
+
+logs: \$RELIEF_HOME/logs/reliefd.log (key=value), reliefd.out (raw stderr)
 EOF
 }
+
+die()       { echo "$PROG: $*" >&2; exit 1; }
+usage_err() { echo "$PROG: $*" >&2; echo "run '$PROG help' for usage" >&2; exit 2; }
+
+# long_to_short "<long>=<short> ..." args...  ->  fills the global ARGS array.
+# Bash getopts only parses short options, so "--camps 8" / "--camps=8" become "-c 8"
+# first and getopts then does the real parsing (unknown long options fall through
+# as "--name" and getopts reports them).
+ARGS=()
+long_to_short() {
+    local map=$1 a name value m found
+    shift
+    ARGS=()
+    while (( $# )); do
+        a=$1
+        shift
+        if [[ "$a" == -- ]]; then
+            ARGS+=("--" "$@")
+            return
+        fi
+        if [[ "$a" != --?* ]]; then
+            ARGS+=("$a")
+            continue
+        fi
+        name=${a#--}
+        value=""
+        if [[ "$name" == *=* ]]; then
+            value=${name#*=}
+            name=${name%%=*}
+        fi
+        found=""
+        for m in $map; do
+            if [[ "${m%%=*}" == "$name" ]]; then
+                found=${m#*=}
+                break
+            fi
+        done
+        [[ -n "$found" ]] || usage_err "unknown option --$name"
+        ARGS+=("-$found")
+        if [[ "$a" == *=* ]]; then
+            ARGS+=("$value")
+        fi
+    done
+    return 0    # never leak a false test's status into set -e callers
+}
+
+is_uint() { [[ "$1" =~ ^[0-9]+$ ]]; }
 
 # Prints the daemon pid and returns 0 if reliefd is alive.
 daemon_pid() {
@@ -55,17 +111,22 @@ daemon_pid() {
     echo "$pid"
 }
 
-cmd_start() {
+require_daemon() {
+    daemon_pid || die "reliefd not running (home $RELIEF_HOME)"
+}
+
+# start_daemon [extra reliefd args...]
+start_daemon() {
     local pid
     if pid=$(daemon_pid); then
         echo "reliefd already running (pid $pid)"
         return 0
     fi
-    [[ -x "$BIN_DIR/reliefd" ]] || { echo "reliefd not built; run 'make' first" >&2; return 1; }
+    [[ -x "$BIN_DIR/reliefd" ]] || die "reliefd not built; run 'make' first"
     rm -f "$PIDFILE"
     mkdir -p "$LOGDIR"
     nohup "${WRAP[@]}" "$BIN_DIR/reliefd" --camps "$CAMPS" --scenario "$SCENARIO" \
-        --time-scale "$TIME_SCALE" \
+        --time-scale "$TIME_SCALE" "$@" \
         >>"$OUTFILE" 2>&1 </dev/null &
     for _ in $(seq 50); do
         if pid=$(daemon_pid); then
@@ -74,12 +135,17 @@ cmd_start() {
         fi
         sleep 0.1
     done
-    echo "reliefd failed to start; see $OUTFILE" >&2
-    return 1
+    die "reliefd failed to start; see $OUTFILE"
+}
+
+cmd_start() {
+    (( $# == 0 )) || usage_err "start takes no arguments"
+    start_daemon
 }
 
 cmd_stop() {
     local pid
+    (( $# == 0 )) || usage_err "stop takes no arguments"
     if ! pid=$(daemon_pid); then
         rm -f "$PIDFILE"
         echo "reliefd not running"
@@ -93,14 +159,25 @@ cmd_stop() {
         fi
         sleep 0.1
     done
-    echo "reliefd (pid $pid) did not stop within 5s" >&2
-    return 1
+    die "reliefd (pid $pid) did not stop within 5s"
 }
 
 cmd_status() {
-    local pid stat="$BIN_DIR/reliefstat"
-    if [[ "${1:-}" == --json ]]; then
-        [[ -x "$stat" ]] || { echo "reliefstat not built; run 'make' first" >&2; return 1; }
+    local pid opt json=0 stat="$BIN_DIR/reliefstat"
+    long_to_short "json=j" "$@"
+    set -- "${ARGS[@]+"${ARGS[@]}"}"
+    local OPTIND=1
+    while getopts ":j" opt; do
+        case "$opt" in
+            j) json=1 ;;
+            *) usage_err "status: unknown option -$OPTARG" ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+    (( $# == 0 )) || usage_err "status: unexpected argument '$1'"
+
+    if (( json )); then
+        [[ -x "$stat" ]] || die "reliefstat not built; run 'make' first"
         "${WRAP[@]}" "$stat" --json
         return
     fi
@@ -114,14 +191,77 @@ cmd_status() {
     fi
 }
 
+# live_camps: "id pid name" for every live camp in the published camp table.
+live_camps() {
+    [[ -r "$CAMPS_PIDS" ]] || return 0
+    awk '$1 ~ /^[0-9]+$/ && ($3 == "RUNNING" || $3 == "STARTING") { print $1, $2, $4 }' "$CAMPS_PIDS"
+}
+
+# proc_row <pid> <label>: one line of PCB fields read from /proc/<pid>/{status,stat}.
+# Returns 1 if the process vanished meanwhile.
+proc_row() {
+    local pid=$1 label=$2 status stat
+    status=$(cat "/proc/$pid/status" 2>/dev/null) || return 1
+    stat=$(cat "/proc/$pid/stat" 2>/dev/null) || return 1
+    awk -v pid="$pid" -v label="$label" -v stat="$stat" -v hz="$CLK_TCK" '
+        /^State:/                      { state = $2; word = $3; gsub(/[()]/, "", word) }
+        /^PPid:/                       { ppid = $2 }
+        /^Threads:/                    { threads = $2 }
+        /^VmRSS:/                      { rss = $2 " " $3 }
+        /^voluntary_ctxt_switches:/    { vol = $2 }
+        /^nonvoluntary_ctxt_switches:/ { nonvol = $2 }
+        END {
+            # /proc/<pid>/stat: "pid (comm) state ppid ...". comm may contain spaces or
+            # ")", so cut after the LAST ") ". Then field k of stat is field k-2 here:
+            # utime (14) -> 12, stime (15) -> 13, both in clock ticks.
+            rest = stat; cut = 0
+            while ((i = index(rest, ") ")) > 0) { cut += i + 1; rest = substr(rest, i + 2) }
+            n = split(substr(stat, cut + 1), f, " ")
+            cpu = (n >= 13) ? (f[12] + f[13]) / hz : 0
+            if (rss == "") rss = "-"            # zombies and kernel threads have no RSS
+            printf "%7s %7s  %-22s %-14s %7s %10s %9s %10s %8.2fs\n", pid, ppid, label,
+                   state " (" word ")", threads, rss, vol, nonvol, cpu
+        }' <<< "$status"
+}
+
+cmd_ps() {
+    local dpid id pid name
+    (( $# == 0 )) || usage_err "ps takes no arguments"
+    dpid=$(require_daemon)
+    CLK_TCK=$(getconf CLK_TCK)
+    echo "# PCB fields from /proc/<pid>/status and /proc/<pid>/stat: the kernel's task_struct (the Linux PCB)."
+    echo "# STATE: R running/runnable, S interruptible sleep, D uninterruptible (disk) sleep, T stopped,"
+    echo "#        Z zombie (exited, not yet reaped). CSW = context switches (voluntary = blocked,"
+    echo "#        nonvoluntary = preempted). CPU = utime + stime."
+    printf "%7s %7s  %-22s %-14s %7s %10s %9s %10s %9s\n" \
+        PID PPID NAME STATE THREADS VmRSS VOL_CSW NONVOL_CSW CPU
+    proc_row "$dpid" "reliefd" || true
+    while read -r id pid name; do
+        [[ -n "$id" ]] || continue
+        proc_row "$pid" "camp $id $name" || printf "%7s %7s  %-22s (exited)\n" "$pid" "-" "camp $id $name"
+    done < <(live_camps)
+}
+
+cmd_tree() {
+    local dpid
+    (( $# == 0 )) || usage_err "tree takes no arguments"
+    dpid=$(require_daemon)
+    # Selecting the daemon and its children; --forest draws the parent/child edges.
+    ps --forest -o pid,ppid,stat,etime,args -p "$dpid" --ppid "$dpid" | sed 's/  *$//'
+    if command -v pstree >/dev/null; then
+        echo
+        pstree -p "$dpid"
+    fi
+}
+
 # camp_targets <camp-id|all>: print "id pid name" for each matching live camp of reliefd.
 # Only pids whose parent is reliefd are returned, so a stale table entry can never
 # make us signal an unrelated process that reused the pid.
 camp_targets() {
     local want=$1 dpid id pid state name ppid found=0 live=0
-    [[ "$want" == all || "$want" =~ ^[0-9]+$ ]] || { echo "camp id must be a number or 'all'" >&2; return 2; }
-    dpid=$(daemon_pid) || { echo "reliefd not running" >&2; return 1; }
-    [[ -r "$CAMPS_PIDS" ]] || { echo "no camp table at $CAMPS_PIDS" >&2; return 1; }
+    [[ "$want" == all || "$want" =~ ^[0-9]+$ ]] || usage_err "camp id must be a number or 'all'"
+    dpid=$(require_daemon)
+    [[ -r "$CAMPS_PIDS" ]] || die "no camp table at $CAMPS_PIDS"
     while read -r id pid state name; do
         [[ "$id" =~ ^[0-9]+$ ]] || continue     # skip comments
         [[ "$want" == all || "$want" == "$id" ]] || continue
@@ -138,13 +278,14 @@ camp_targets() {
         echo "$id $pid $name"
         live=$((live + 1))
     done < "$CAMPS_PIDS"
-    (( found )) || { echo "no camp with id $want" >&2; return 1; }
-    (( live )) || return 1
+    (( found )) || die "no camp with id $want"
+    (( live )) || exit 1
 }
 
 cmd_alert() {
     local targets id pid name
-    targets=$(camp_targets "${1:-}") || return $?
+    (( $# == 1 )) || usage_err "usage: $PROG alert <camp-id|all>"
+    targets=$(camp_targets "$1")
     while read -r id pid name; do
         kill -USR1 "$pid"
         echo "evacuation alert (SIGUSR1) -> camp $id $name (pid $pid)"
@@ -152,8 +293,9 @@ cmd_alert() {
 }
 
 cmd_dump() {
-    local targets n before id pid name new
-    targets=$(camp_targets "${1:-}") || return $?
+    local targets n before id pid name new=0
+    (( $# == 1 )) || usage_err "usage: $PROG dump <camp-id|all>"
+    targets=$(camp_targets "$1")
     n=$(wc -l <<< "$targets")
     before=$(wc -l < "$OUTFILE" 2>/dev/null || echo 0)
     while read -r id pid name; do
@@ -166,20 +308,169 @@ cmd_dump() {
         sleep 0.1
     done
     tail -n +"$((before + 1))" "$OUTFILE" 2>/dev/null | grep ' event=status ' | sed 's/.* event=status //' | sort -t= -k2 -n
-    (( new >= n )) || { echo "only $new of $n camps answered (see $OUTFILE)" >&2; return 1; }
+    (( new >= n )) || die "only $new of $n camps answered (see $OUTFILE)"
 }
 
-coming() { echo "reliefctl $1: coming in Phase $2"; }
+# report [--since MIN] [--last-run]: summarise event=request lines of the structured log.
+cmd_report() {
+    local opt since="" last_run=0 first=1 cutoff="" label="whole log"
+    long_to_short "since=m last-run=l" "$@"
+    set -- "${ARGS[@]+"${ARGS[@]}"}"
+    local OPTIND=1
+    while getopts ":m:l" opt; do
+        case "$opt" in
+            m) is_uint "$OPTARG" || usage_err "report: --since needs whole minutes, got '$OPTARG'"
+               since=$OPTARG ;;
+            l) last_run=1 ;;
+            :) usage_err "report: -$OPTARG needs a value" ;;
+            *) usage_err "report: unknown option -$OPTARG" ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+    (( $# == 0 )) || usage_err "report: unexpected argument '$1'"
+    [[ -r "$EVENTLOG" ]] || die "no log at $EVENTLOG (has reliefd run?)"
 
-case "${1:-}" in
-    start)    cmd_start ;;
-    stop)     cmd_stop ;;
-    status)   cmd_status "${2:-}" ;;
-    alert)    cmd_alert "${2:-}" ;;
-    dump)     cmd_dump "${2:-}" ;;
-    ps)       coming ps 1 ;;
-    simulate) coming simulate 2 ;;
-    report)   coming report 2 ;;
-    -h|--help|help) usage ;;
-    *)        usage >&2; exit 2 ;;
-esac
+    if (( last_run )); then
+        first=$(grep -n ' event=daemon_start ' "$EVENTLOG" | tail -n 1 | cut -d: -f1)
+        [[ -n "$first" ]] || die "no reliefd run found in $EVENTLOG"
+        label="last run (from line $first)"
+    fi
+    if [[ -n "$since" ]]; then
+        # Log timestamps are local ISO-8601, so plain string comparison orders them.
+        cutoff=$(date -d "-$since minutes" +%Y-%m-%dT%H:%M:%S)
+        label="$label, since $cutoff (last $since min)"
+    fi
+
+    awk -v first="$first" -v cutoff="$cutoff" -v label="$label" -v logfile="$EVENTLOG" '
+        function parse(   i, kv) {
+            delete f
+            for (i = 1; i <= NF; i++) { split($i, kv, "="); f[kv[1]] = kv[2] }
+        }
+        NR < first { next }
+        / event=camp_spawn / { parse(); name[f["camp"]] = f["name"]; next }
+        / event=request / {
+            if (cutoff != "" && substr($1, 4, 19) < cutoff) next
+            parse()
+            total++
+            camp[f["camp"]]++; sev[f["severity"]]++; res[f["resource"]]++
+            if (f["alert"] == 1) escalated++
+            if (firstts == "") firstts = substr($1, 4)
+            lastts = substr($1, 4)
+        }
+        END {
+            printf "ReliefOS request report\n  log: %s\n  window: %s\n", logfile, label
+            if (total == 0) { print "  no requests in this window"; exit 0 }
+            printf "  requests: %d (first %s, last %s), escalated by alerts: %d\n\n",
+                   total, firstts, lastts, escalated + 0
+            printf "Per camp\n  %3s  %-14s %8s %7s\n", "ID", "NAME", "REQUESTS", "SHARE"
+            for (c in camp) ids[++n] = c + 0
+            for (i = 2; i <= n; i++) {              # insertion sort by camp id
+                v = ids[i]; for (j = i - 1; j >= 1 && ids[j] > v; j--) ids[j + 1] = ids[j]; ids[j + 1] = v
+            }
+            for (i = 1; i <= n; i++) {
+                c = ids[i]
+                printf "  %3d  %-14s %8d %6.1f%%\n", c, (c in name) ? name[c] : "?", camp[c], 100 * camp[c] / total
+                if (camp[c] > best) { best = camp[c]; busiest = c }
+            }
+            printf "\nPer severity\n"
+            split("CRITICAL URGENT ROUTINE", order, " ")
+            for (i = 1; i <= 3; i++)
+                printf "  %-12s %6d %6.1f%%\n", order[i], sev[order[i]], 100 * sev[order[i]] / total
+            printf "\nPer resource\n"
+            split("RESCUE BOAT TRUCK MED_KIT FOOD_KIT HYGIENE_KIT", rorder, " ")
+            for (i = 1; i <= 6; i++)
+                printf "  %-12s %6d %6.1f%%\n", rorder[i], res[rorder[i]], 100 * res[rorder[i]] / total
+            printf "\nBusiest camp: %d %s (%d requests, %.1f%%)\n", busiest,
+                   (busiest in name) ? name[busiest] : "?", best, 100 * best / total
+        }' "$EVENTLOG"
+}
+
+# make_camps_conf <n> <file>: the first n camps of camps.conf, padded with generic names.
+make_camps_conf() {
+    local n=$1 out=$2
+    awk -v n="$n" '
+        $1 ~ /^[0-9]+$/ && count < n { print $1, $2; count++; used[$1] = 1 }
+        END { for (id = 1; count < n; id++) if (!(id in used)) { print id, "Camp" id; count++ } }
+    ' "$ROOT/scenarios/camps.conf" > "$out"
+}
+
+cmd_simulate() {
+    local opt kind camps=8 seed=2019 rows=200 scale=10 dir conf csv start_line byes=0 dpid timeout_s v
+    [[ $# -ge 1 ]] || usage_err "usage: $PROG simulate flood [--camps N] [--seed S] [--rows R] [--time-scale MS]"
+    kind=$1
+    shift
+    [[ "$kind" == flood ]] || usage_err "simulate: unknown scenario '$kind' (supported: flood)"
+    long_to_short "camps=c seed=s rows=r time-scale=t" "$@"
+    set -- "${ARGS[@]+"${ARGS[@]}"}"
+    local OPTIND=1
+    while getopts ":c:s:r:t:" opt; do
+        case "$opt" in
+            c) camps=$OPTARG ;;
+            s) seed=$OPTARG ;;
+            r) rows=$OPTARG ;;
+            t) scale=$OPTARG ;;
+            :) usage_err "simulate: -$OPTARG needs a value" ;;
+            *) usage_err "simulate: unknown option -$OPTARG" ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+    (( $# == 0 )) || usage_err "simulate: unexpected argument '$1'"
+    for v in "$camps" "$seed" "$rows" "$scale"; do
+        is_uint "$v" || usage_err "simulate: options need non-negative integers, got '$v'"
+    done
+    (( camps >= 1 && camps <= 64 )) || usage_err "simulate: --camps must be 1-64"
+    (( rows >= camps )) || usage_err "simulate: --rows must be at least --camps"
+    if dpid=$(daemon_pid); then
+        die "reliefd already running (pid $dpid); stop it before simulating"
+    fi
+
+    dir="$RELIEF_HOME/sim"
+    mkdir -p "$dir"
+    conf="$dir/camps_${camps}.conf"
+    csv="$dir/flood_c${camps}_s${seed}_r${rows}.csv"
+    make_camps_conf "$camps" "$conf"
+    python3 -I "$ROOT/experiments/gen_scenario.py" --camps "$camps" --seed "$seed" --rows "$rows" -o "$csv" \
+        || die "scenario generation failed"
+    echo "scenario: $csv ($rows requests, $camps camps, seed $seed, $scale ms per simulated minute)"
+
+    mkdir -p "$LOGDIR"
+    touch "$EVENTLOG"
+    start_line=$(( $(wc -l < "$EVENTLOG") + 1 ))
+    CAMPS=$conf SCENARIO=$csv TIME_SCALE=$scale start_daemon --seed "$seed" --exit-when-done
+    dpid=$(daemon_pid) || die "reliefd did not start"
+
+    # Wait until every camp has replayed its rows and sent BYE (camps run with --exit-when-done).
+    timeout_s=$(( 360 * scale / 1000 + 30 ))
+    for _ in $(seq $((timeout_s * 10))); do
+        byes=$(tail -n +"$start_line" "$EVENTLOG" | grep -c ' event=bye ' || true)
+        (( byes >= camps )) && break
+        kill -0 "$dpid" 2>/dev/null || die "reliefd exited during the simulation; see $OUTFILE"
+        sleep 0.1
+    done
+    (( byes >= camps )) || { cmd_stop >/dev/null || true; die "timed out: $byes of $camps camps sent BYE"; }
+    echo "all $camps camps sent BYE"
+    cmd_stop
+    echo
+    cmd_report --last-run
+}
+
+main() {
+    local cmd=${1:-}
+    [[ -n "$cmd" ]] || { usage >&2; exit 2; }
+    shift
+    case "$cmd" in
+        start)          cmd_start "$@" ;;
+        stop)           cmd_stop "$@" ;;
+        status)         cmd_status "$@" ;;
+        ps)             cmd_ps "$@" ;;
+        tree)           cmd_tree "$@" ;;
+        alert)          cmd_alert "$@" ;;
+        dump)           cmd_dump "$@" ;;
+        report)         cmd_report "$@" ;;
+        simulate)       cmd_simulate "$@" ;;
+        -h|--help|help) usage ;;
+        *)              usage_err "unknown command '$cmd'" ;;
+    esac
+}
+
+main "$@"

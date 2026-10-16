@@ -203,11 +203,13 @@ static int receive_one(mqd_t mq, long timeout_ms, camp_table_t *camps, stats_t *
 static void usage(const char *prog)
 {
     fprintf(stderr,
-            "usage: %s [--camps FILE] [--scenario FILE] [--seed N] [--time-scale MS] [--camp-bin PATH]\n"
+            "usage: %s [--camps FILE] [--scenario FILE] [--seed N] [--time-scale MS] [--exit-when-done]\n"
+            "          [--camp-bin PATH]\n"
             "  --camps     camps config, one \"<id> <name>\" per line (default %s)\n"
             "  --scenario  scenario CSV passed to every camp (default %s)\n"
             "  --seed      seed passed to every camp (default 1)\n"
             "  --time-scale  real ms per simulated minute for camps (default %d, 0 = no pacing)\n"
+            "  --exit-when-done  camps send BYE and exit 0 after replaying the scenario\n"
             "  --camp-bin  camp executable (default: camp next to reliefd)\n",
             prog, DEFAULT_CAMPS_CONF, DEFAULT_SCENARIO, DEFAULT_TIME_SCALE);
 }
@@ -219,6 +221,7 @@ int main(int argc, char **argv)
         { "scenario", required_argument, NULL, 's' },
         { "seed",     required_argument, NULL, 'S' },
         { "time-scale", required_argument, NULL, 't' },
+        { "exit-when-done", no_argument,   NULL, 'x' },
         { "camp-bin", required_argument, NULL, 'b' },
         { "help",     no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
@@ -239,7 +242,7 @@ int main(int argc, char **argv)
     camps.seed = 1;
     camps.time_scale_ms = DEFAULT_TIME_SCALE;
 
-    while ((opt = getopt_long(argc, argv, "c:s:S:t:b:h", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:s:S:t:xb:h", opts, NULL)) != -1) {
         char *end;
         switch (opt) {
         case 'c': camps_conf = optarg; break;
@@ -261,6 +264,7 @@ int main(int argc, char **argv)
                 return 2;
             }
             break;
+        case 'x': camps.exit_when_done = 1; break;
         case 'h': usage(argv[0]); return 0;
         default:  usage(argv[0]); return 2;
         }

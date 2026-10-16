@@ -40,6 +40,7 @@ typedef struct {
     char          scenario[CAMPS_PATH_MAX];
     unsigned long seed;
     unsigned long time_scale_ms;    /* real ms per simulated minute, passed to camps */
+    int           exit_when_done;   /* camps exit (BYE, status 0) after replaying the scenario */
     int           shutting_down;    /* no restarts once set */
     int           dirty;            /* table changed since the last camps_save() */
     char          pids_path[CAMPS_PATH_MAX];   /* $RELIEF_HOME/camps.pids, "" = don't publish */

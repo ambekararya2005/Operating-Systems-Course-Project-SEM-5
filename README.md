@@ -11,7 +11,7 @@ working demo of the OS syllabus.
 | Trucks / boats  | Shared devices   |
 | Rescue requests | Jobs to schedule |
 
-**Status:** Phase 1 (foundation) in progress. `reliefd` is the parent of all camp processes. It
+**Status:** Phase 1 (foundation) complete. `reliefd` is the parent of all camp processes. It
 fork/execs one camp per line of `scenarios/camps.conf`, reaps them on SIGCHLD, restarts crashed
 camps, and shuts them all down cleanly. Camps send their scenario requests over a POSIX message
 queue, each at its arrival time on a simulated clock (1 simulated minute = 100 ms by default).
@@ -36,10 +36,16 @@ make                 # builds build/reliefd and build/camp
 make test            # tests/smoke.sh (IPC, reliefctl), tests/camps.sh (fork/exec, restarts, no zombies),
                      # tests/traffic.sh (200-row paced replay, queue-full retries),
                      # tests/signals.sh (alert, dump, graceful SIGTERM),
-                     # tests/status.sh (shared-memory status table, robust mutex recovery)
+                     # tests/status.sh (shared-memory status table, robust mutex recovery),
+                     # tests/cli.sh (reliefctl ps/tree/report/simulate, stockcheck.sh)
 make tsan            # ThreadSanitizer build (build/tsan/) + tests
 make valgrind        # tests under valgrind (camps too)
 make clean
+```
+
+One command, end to end (generate a scenario, run it until every camp sends BYE, report):
+```sh
+scripts/reliefctl simulate flood --camps 8 --seed 42
 ```
 
 Try it by hand:
@@ -53,6 +59,9 @@ grep -c 'event=request ' run/logs/reliefd.log   # climbs to 200 over ~36 s (360 
 scripts/reliefctl alert 3                  # SIGUSR1: camp 3's next 5 requests become CRITICAL
 grep ' camp=3 ' run/logs/reliefd.log | grep alert=1   # ...severity=CRITICAL alert=1 orig_severity=ROUTINE
 scripts/reliefctl dump all                 # SIGUSR2: every camp prints its counters
+scripts/reliefctl ps                       # PCB fields from /proc: state, threads, RSS, context switches, CPU
+scripts/reliefctl tree                     # process tree rooted at reliefd
+scripts/reliefctl report --since 10        # requests per camp / severity / resource, busiest camp
 grep 'event=camp_' run/logs/reliefd.log    # structured key=value log
 scripts/reliefctl stop                     # SIGTERM camps, SIGKILL stragglers after 2 s, reap all
 ```
@@ -79,15 +88,27 @@ and `logs/reliefd.out` (raw stderr). You never need root.
 | `status [--json]` | Shows whether reliefd is running, then the live camp table from shared memory (`reliefstat`): pid, state, requests sent, heartbeat, restarts |
 | `alert <id\|all>` | Evacuation alert (SIGUSR1). The camp's next 5 requests are sent as CRITICAL |
 | `dump <id\|all>`  | Status dump (SIGUSR2). Prints each camp's counters: sent, by severity, escalations, uptime |
-| `ps`       | Coming in Phase 1 |
-| `simulate` | Coming in Phase 2 |
-| `report`   | Coming in Phase 2 |
+| `ps`       | PID, PPID, state (R/S/D/T/Z), threads, VmRSS, voluntary/nonvoluntary context switches and CPU time, read from `/proc/<pid>/status` and `/proc/<pid>/stat` (the kernel's task_struct) |
+| `tree`     | Process tree rooted at reliefd (`ps --forest` and `pstree`) |
+| `report [--since MIN] [--last-run]` | awk over `logs/reliefd.log`: requests per camp, severity and resource, plus the busiest camp |
+| `simulate flood [--camps N] [--seed S] [--rows R] [--time-scale MS]` | Generate a scenario, run it until every camp sends BYE, stop, print the report |
+
+Exit codes: 0 success, 1 runtime error (e.g. reliefd not running), 2 usage error. Long options such as
+`--camps=8` are translated to short ones and parsed with `getopts`.
+
+### Cron: stockcheck
+`scripts/stockcheck.sh [-t THRESHOLD] [-w WINDOW_MIN] [-q]` counts requests logged in the last window and
+warns (stderr, `logs/stockcheck.log`, exit 1) above the threshold. It is not installed automatically. To
+run it every 10 minutes, add this with `crontab -e`:
+```
+*/10 * * * * RELIEF_HOME=$HOME/os-course-project-sem5/run $HOME/os-course-project-sem5/scripts/stockcheck.sh -t 50 -w 10 -q
+```
 
 ## Syllabus mapping
 | Unit | Topics | ReliefOS feature | Phase |
 |------|--------|------------------|-------|
-| 1 | Shell programming, modular kernels | `reliefctl`, awk reports, cron, `relief.ko` | 1, 6 |
-| 2 | fork/exec/waitpid, process states/PCB, pthreads | reliefd supervises camp processes (SIGCHLD reaping, restarts); `reliefctl ps` via `/proc` | 1 |
+| 1 | Shell programming, modular kernels | `reliefctl` (functions, getopts, awk report), `stockcheck.sh` cron job; `relief.ko` | 1, 6 |
+| 2 | fork/exec/waitpid, process states/PCB, pthreads | reliefd supervises camp processes (SIGCHLD reaping, restarts); `reliefctl ps`/`tree` read the PCB via `/proc` | 1 |
 | 2 | IPC (POSIX message queues) | Camps send paced requests over a bounded queue; mq_timedsend back-pressure | 1 |
 | 2, 3 | IPC via POSIX shared memory, process-shared mutex | Live status table `/reliefos_status` read by `reliefstat` (robust mutex + seqlock) | 1 |
 | 2 | Signals as IPC, process control | `reliefctl alert` (SIGUSR1), `dump` (SIGUSR2), graceful SIGTERM; flag-only handlers | 1 |
