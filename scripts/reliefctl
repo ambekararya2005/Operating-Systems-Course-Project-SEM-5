@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# OS concept: Shell programming — process control via pid files and signals — Unit 1
+#
+# reliefctl: control the ReliefOS coordinator daemon.
+#   RELIEF_HOME     runtime directory (default: <repo>/run)
+#   RELIEF_BIN_DIR  directory holding reliefd (default: <repo>/build)
+#   RELIEF_WRAP     optional command prefix for reliefd, e.g. "strace -f -o trace.txt"
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+RELIEF_HOME=${RELIEF_HOME:-$ROOT/run}
+mkdir -p "$RELIEF_HOME"
+RELIEF_HOME=$(cd "$RELIEF_HOME" && pwd)
+export RELIEF_HOME
+BIN_DIR=${RELIEF_BIN_DIR:-$ROOT/build}
+read -r -a WRAP <<< "${RELIEF_WRAP:-}"
+PIDFILE="$RELIEF_HOME/reliefd.pid"
+LOGFILE="$RELIEF_HOME/reliefd.log"
+
+usage() {
+    cat <<EOF
+usage: reliefctl <command>
+
+commands:
+  start      start reliefd in the background (log: \$RELIEF_HOME/reliefd.log)
+  stop       stop reliefd (SIGTERM)
+  status     show whether reliefd is running
+  ps         list camp processes            (coming in Phase 1)
+  simulate   run a scenario through reliefd (coming in Phase 2)
+  report     summarise experiment results   (coming in Phase 2)
+EOF
+}
+
+# Prints the daemon pid and returns 0 if reliefd is alive.
+daemon_pid() {
+    local pid
+    [[ -s "$PIDFILE" ]] || return 1
+    read -r pid < "$PIDFILE" || return 1
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    echo "$pid"
+}
+
+cmd_start() {
+    local pid
+    if pid=$(daemon_pid); then
+        echo "reliefd already running (pid $pid)"
+        return 0
+    fi
+    [[ -x "$BIN_DIR/reliefd" ]] || { echo "reliefd not built; run 'make' first" >&2; return 1; }
+    rm -f "$PIDFILE"
+    nohup "${WRAP[@]}" "$BIN_DIR/reliefd" >>"$LOGFILE" 2>&1 </dev/null &
+    for _ in $(seq 50); do
+        if pid=$(daemon_pid); then
+            echo "reliefd started (pid $pid, home $RELIEF_HOME)"
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "reliefd failed to start; see $LOGFILE" >&2
+    return 1
+}
+
+cmd_stop() {
+    local pid
+    if ! pid=$(daemon_pid); then
+        rm -f "$PIDFILE"
+        echo "reliefd not running"
+        return 0
+    fi
+    kill -TERM "$pid"
+    for _ in $(seq 50); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "reliefd stopped (pid $pid)"
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "reliefd (pid $pid) did not stop within 5s" >&2
+    return 1
+}
+
+cmd_status() {
+    local pid
+    if pid=$(daemon_pid); then
+        echo "running  pid=$pid  uptime=$(ps -o etime= -p "$pid" | tr -d ' ')  home=$RELIEF_HOME"
+    else
+        echo "stopped  home=$RELIEF_HOME"
+    fi
+}
+
+coming() { echo "reliefctl $1: coming in Phase $2"; }
+
+case "${1:-}" in
+    start)    cmd_start ;;
+    stop)     cmd_stop ;;
+    status)   cmd_status ;;
+    ps)       coming ps 1 ;;
+    simulate) coming simulate 2 ;;
+    report)   coming report 2 ;;
+    -h|--help|help) usage ;;
+    *)        usage >&2; exit 2 ;;
+esac

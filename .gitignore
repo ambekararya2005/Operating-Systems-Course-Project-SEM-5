@@ -1,0 +1,18 @@
+# Build output
+build/
+*.o
+*.d
+
+# Runtime state ($RELIEF_HOME default) and experiment output
+run/
+experiments/results/
+
+# Kernel module build artifacts (kernel/)
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+*.symvers
+*.order
+.*.cmd
+.tmp_versions/

@@ -1,0 +1,99 @@
+# ReliefOS — Linux-Based Smart Disaster Relief Resource Management
+
+Operating Systems course project (Sem 5). A C program on Linux that models a disaster-relief
+network as an operating system:
+
+| Relief world          | OS concept            |
+|-----------------------|-----------------------|
+| Relief camps          | Processes             |
+| Supplies              | Memory                |
+| Trucks / boats        | Shared devices        |
+| Rescue requests       | Jobs to schedule      |
+
+**Core rule:** every feature must demonstrate a named syllabus topic (see mapping below). The
+project is also a working demo of the syllabus. If a feature maps to no topic, don't build it.
+
+## Architecture
+- **reliefd**: coordinator daemon (C11, pthreads). Modules: triage scheduler, deadlock control,
+  sync layer, warehouse allocators, delivery router, write-ahead journal.
+- **camp**: one process per relief camp, started with fork/exec by reliefd. Sends requests to
+  reliefd over a POSIX message queue.
+- **reliefctl**: Bash CLI with `start`, `stop`, `status`, `ps`, `simulate` and `report`. An ncurses UI comes later.
+- **relief.ko**: loadable kernel module that exposes `/proc/relief` (Phase 6).
+- **reliefd.service**: systemd unit (Phase 6).
+
+Layout (folders marked * are created in later phases):
+- `include/`: `relief.h` (shared wire types, see Conventions), `log.h`, `rng.h`
+- `src/reliefd/`, `src/camp/`: one source per program. `src/common/` holds shared code (logger).
+  Add reliefd modules as one file per OS concept
+- `scripts/`: reliefctl, plus awk report scripts and cron entries later
+- `tests/`: `smoke.sh` (run by `make test`, `make tsan` and `make valgrind`)
+- `scenarios/`: workload CSVs (`arrival_min,camp_id,severity,resource,quantity,service_time`)
+- `systemd/`: `reliefd.service` template (not installed until Phase 6)
+- `docs/`: ARCHITECTURE.md, EXPERIMENTS.md
+- `kernel/`*: relief.ko, self-contained with its own Makefile
+- `experiments/`*: experiment drivers. `experiments/results/` holds the CSV output (git-ignored)
+- `build/`: binaries (`build/tsan/` for TSan). `run/`: default `$RELIEF_HOME`. Both are git-ignored
+
+## Syllabus mapping (keep every feature tied to one of these)
+- **Unit 1**: shell programming (reliefctl, awk reports, cron) and modular kernels (relief.ko)
+- **Unit 2**: fork/exec/waitpid, process states and the PCB via `/proc`, pthreads. Scheduling with FCFS, SJF, RR,
+  Priority, and MLFQ with aging. A real SCHED_FIFO / SCHED_RR / nice comparison
+- **Unit 3**: producer-consumer (warehouse → truck), readers-writers (inventory), Peterson's
+  algorithm (two camps, one boat), Banker's avoidance, wait-for-graph detection + recovery,
+  resource-ordering prevention
+- **Unit 4**: first/best/worst fit and fragmentation, buddy system (warehouse space), slab allocator
+  (pre-packed relief kits), FIFO/LRU/Optimal/expiry-first replacement (perishables), thrashing demo
+- **Unit 5**: FCFS/SSTF/SCAN/C-SCAN/LIFO as delivery routing on one highway, write-ahead journal
+  with fsync + crash recovery, a directory tree with permissions per role
+- **Unit 6**: user space vs kernel space via `/proc/relief`, strace of a request lifecycle, a systemd boot
+  service, and an optional Android/Termux client
+
+## Roles
+`relief-admin`, `relief-officer` and `relief-volunteer`, enforced as Linux groups.
+
+## Conventions
+- C11. Build with `gcc -std=c11 -Wall -Wextra -Werror -pthread -D_POSIX_C_SOURCE=200809L`
+  (the macro is needed for mq_*, sigaction and clock_gettime under strict C11). No external libraries
+  except ncurses and librt.
+- `include/relief.h` defines everything that crosses a process boundary (message structs, enums,
+  queue names). Don't define wire types anywhere else.
+- Runtime files go in `$RELIEF_HOME`, which defaults to `./run`. Development must never need root.
+- Every algorithm sits behind a pluggable function-pointer interface, so experiments can swap
+  policies without changing callers.
+- Every experiment is deterministic for a given `--seed` and writes CSV to `experiments/results/`.
+- Each module's header starts with a comment naming the OS concept and the syllabus unit it
+  demonstrates, e.g. `/* OS concept: Buddy system allocation — Unit 4 */`.
+- The code must pass ThreadSanitizer and Valgrind with no errors.
+- Make small commits, one per feature, with the message prefix `[Unit N]`, e.g. `[Unit 3] Add Banker's avoidance`.
+- Never run git commands (init, add, commit, push). The user handles all version control. At the end
+  of each task, list the changed files and suggest a commit message in the [Unit N] / [Phase N] format.
+
+## Dev environment
+- WSL2 Ubuntu 24.04 on Windows. The project lives under `~/`, never `/mnt/c` (slow I/O, wrong
+  permissions semantics).
+- The kernel module (Phase 6) is built and tested in a separate VirtualBox Ubuntu VM, not in WSL2.
+  Keep `kernel/` self-contained with its own Makefile. Nothing outside `kernel/` may depend on it
+  being loaded.
+
+## Commands
+- `make` / `make test` / `make tsan` / `make valgrind` / `make clean`. `make run` runs reliefd in the foreground
+- `scripts/reliefctl start|stop|status`. Env vars: `RELIEF_HOME`, `RELIEF_BIN_DIR`, and `RELIEF_WRAP` (a command
+  prefix such as valgrind or strace)
+- `build/camp --id N --count N --seed S`, or `build/camp --shutdown` to stop reliefd
+- `make tsan` runs under `setarch -R`, because GCC 13 TSan aborts under WSL2's ASLR entropy
+- The queue `/reliefos_requests` is system-wide: only one reliefd can run at a time
+
+## Build phases
+1. **Foundation**: reliefctl CLI, camp processes, IPC (message queue)
+2. **Scheduling**: plus experiments E1/E2
+3. **Sync and deadlock**
+4. **Memory management**
+5. **Files, journal, routing**
+6. **Kernel module, systemd, strace, final report**
+
+Work the phases in order. Within a phase, ship all P0 features before any P1/P2.
+
+## Current status
+Phase 0 skeleton done: reliefd and camp exchange messages over the mq, and reliefctl supports start/stop/status. In this
+skeleton, camps are launched by hand. reliefd fork/exec of camps is Phase 1. Update this line as phases complete.
