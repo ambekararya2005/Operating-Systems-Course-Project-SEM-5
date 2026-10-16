@@ -1,6 +1,6 @@
 # ReliefOS build. Binaries go to $(BUILD)/ (default build/).
 #   make            build reliefd, camp and reliefstat
-#   make test       tests/{smoke,camps,traffic,signals,status,cli}.sh
+#   make test       tests/{smoke,camps,traffic,signals,status,cli}.sh + tests/phase1_smoke.sh (gate M1)
 #   make tsan       ThreadSanitizer build in build/tsan/ + tests
 #   make valgrind   tests with reliefd and camps under valgrind
 #   make run        run reliefd in the foreground (RELIEF_HOME=./run)
@@ -28,7 +28,8 @@ RELIEFSTAT_OBJ := $(RELIEFSTAT_SRC:%.c=$(OBJ)/%.o)
 SHM_DIE_SRC := tests/helpers/shm_die_locked.c src/common/shm.c
 SHM_DIE_OBJ := $(SHM_DIE_SRC:%.c=$(OBJ)/%.o)
 
-TESTS := tests/smoke.sh tests/camps.sh tests/traffic.sh tests/signals.sh tests/status.sh tests/cli.sh
+TESTS := tests/smoke.sh tests/camps.sh tests/traffic.sh tests/signals.sh tests/status.sh tests/cli.sh \
+         tests/phase1_smoke.sh
 
 # --trace-children: camps exec'd by reliefd also run under valgrind.
 VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
@@ -75,7 +76,7 @@ tsan:
 	$(call run_tests,BIN_DIR=build/tsan RELIEF_WRAP="setarch $$(uname -m) -R")
 
 valgrind: all
-	$(call run_tests,BIN_DIR=$(BUILD) RELIEF_WRAP="$(VALGRIND)" TEST_TIMEOUT=30)
+	$(call run_tests,BIN_DIR=$(BUILD) RELIEF_WRAP="$(VALGRIND)" TEST_TIMEOUT=30 PHASE1_CAMPS=2)
 
 clean:
 	rm -rf build

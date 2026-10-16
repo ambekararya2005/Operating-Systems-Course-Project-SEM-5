@@ -1,13 +1,66 @@
 # ReliefOS Architecture
 
-> Placeholder. To be filled in as phases land.
+> Updated as phases land. Phase 1 (Foundation) is complete; later phases add the scheduler,
+> synchronisation, memory management, journaling and the kernel module inside or around reliefd.
 
 ## Components
 - **reliefd**: coordinator daemon (triage scheduler, deadlock control, sync layer,
   warehouse allocators, delivery router, write-ahead journal)
 - **camp**: one process per relief camp; client of the request queue
 - **reliefctl**: Bash control CLI
+- **reliefstat**: read-only viewer of the live status table
 - **relief.ko**: kernel module exposing `/proc/relief` (Phase 6)
+
+## Phase 1: process model and IPC
+
+### Process model
+reliefd is a long-running daemon and the **parent of every camp**. At startup it reads
+`scenarios/camps.conf` and `fork()` + `execv()`s one `camp` process per line, so each relief camp is a
+real Linux process with its own pid, address space and PCB (`reliefctl ps` reads that PCB from
+`/proc/<pid>/{status,stat}`). reliefd keeps a camp table (its own small "process table"): it reaps
+children on SIGCHLD with `waitpid(-1, WNOHANG)`, tells normal exits from signal deaths, restarts a crashed
+camp up to 3 times, and on shutdown escalates SIGTERM → (2 s grace) → SIGKILL and reaps until `ECHILD`,
+so no zombies or orphans survive. Camps also set `PR_SET_PDEATHSIG`, so they die if reliefd is SIGKILLed.
+
+```
+  reliefctl (start/stop/ps/alert/dump)   reliefstat           report / stockcheck.sh
+        │ kill(2) via reliefd.pid,        │ mmap PROT_READ       │ awk
+        │ camps.pids                      ▼                      ▼
+        │                     ┌────────────────────────┐   logs/reliefd.log
+        │                     │ shm /reliefos_status   │         ▲
+        │                     │ daemon + camp state    │         │ key=value events
+        │                     └────▲──────────────▲────┘         │
+        │       pid, state, restarts│              │ sent, heartbeat (own row)
+        ▼                           │              │
+  ┌───────────────────────────────────────┐        │
+  │ reliefd   camp table · SIGCHLD reaper  │────────┼────────────┘
+  │           mq receive loop · shm owner  │        │
+  └──┬──────────────────────────────▲──────┘        │
+     │ fork+execv, SIGTERM/SIGKILL  │ mq /reliefos_requests
+     │ (SIGCHLD back on exit)       │ HELLO · REQUEST · BYE
+     ▼                              │                │
+  ┌──────────────────────────────────┴────────────────┴───┐
+  │  camp 1 · camp 2 · … · camp 8   (one process each)    │◀── SIGUSR1 alert / SIGUSR2 dump
+  └───────────────────────────────────────────────────────┘     (reliefctl, via camps.pids)
+```
+
+### IPC choices and why each fits
+| Mechanism | Used for | Why it fits |
+|-----------|----------|-------------|
+| **POSIX message queue** `/reliefos_requests` | Camps → reliefd: HELLO, REQUEST, BYE, SHUTDOWN | Requests are discrete, fixed-size records (`relief_msg_t`, 128 bytes) from many producers to one consumer. The kernel keeps message boundaries, serialises the concurrent senders and provides a **bounded buffer** (10 slots): a full queue makes `mq_timedsend` wait, which is natural back-pressure. Priorities are available for the Phase 2 triage scheduler. |
+| **POSIX shared memory** `/reliefos_status` | Live status table: camp pid, state, requests sent, heartbeat | State that many processes read often and update in place. Copying it through a queue would be wasteful, while shared memory lets any process read it without a system call per read. It needs its own synchronisation: a process-shared, robust pthread mutex for writers and a seqlock so `reliefstat` can read from a read-only mapping. |
+| **Signals** | Control: SIGTERM stop, SIGUSR1 alert, SIGUSR2 dump, SIGCHLD child exit, SIGALRM heartbeat | Asynchronous notifications that carry no data except "something happened". They interrupt a sleeping process immediately (`clock_nanosleep`, `sigsuspend` and `mq_timedreceive` all wake up). Handlers only set `sig_atomic_t` flags; the work happens in the main loop. |
+| **Files in `$RELIEF_HOME`** | `reliefd.pid`, `camps.pids` (atomic rename), `logs/reliefd.log` | Discovery and history for shell tools: plain text that `kill`, `awk` and `grep` can use, so reliefctl needs no C client. |
+
+A simple pipe would not fit the request stream: it is a byte stream with no message boundaries, and
+anonymous pipes only connect related processes. A socket would work but adds connection management
+that a single-host, fixed-format protocol does not need.
+
+### Verified by
+`tests/phase1_smoke.sh` (gate M1 "camps reach reliefd") runs `reliefctl simulate flood --camps 8 --seed 42`.
+It checks 8 HELLO, 8 BYE and 200 requests, no zombies during or after the run, and that the queue,
+the shared memory segment and the pid files are removed. It also checks the report. The other
+`tests/*.sh` cover each mechanism in depth, and every test runs under ThreadSanitizer and Valgrind.
 
 ## Message flow
 ```
@@ -91,7 +144,7 @@ Values contain no spaces, except `msg="..."` on free-form `event=log` lines. Eve
 `camp_crashed`, `camp_killed`, `camp_final`, `hello`, `request`, `bye`, `shutdown` and `daemon_stop`.
 
 ## TODO
-- [ ] Component diagram
+- [x] Component diagram (Phase 1 process model above)
 - [ ] Request lifecycle (camp → scheduler → allocator → router → journal)
 - [ ] Thread model inside reliefd
 - [ ] Policy plug-in interfaces (function-pointer tables)
