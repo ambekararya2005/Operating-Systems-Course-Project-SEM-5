@@ -33,7 +33,8 @@ sudo apt install build-essential valgrind shellcheck
 ## Build, run, test
 ```sh
 make                 # builds build/reliefd and build/camp
-make test            # tests/smoke.sh (IPC, reliefctl), tests/camps.sh (fork/exec, restarts, no zombies),
+make test            # tests/sched.sh (scheduler unit tests incl. textbook FCFS, schedsim),
+                     # tests/smoke.sh (IPC, reliefctl), tests/camps.sh (fork/exec, restarts, no zombies),
                      # tests/traffic.sh (200-row paced replay, queue-full retries),
                      # tests/signals.sh (alert, dump, graceful SIGTERM),
                      # tests/status.sh (shared-memory status table, robust mutex recovery),
@@ -66,6 +67,17 @@ grep 'event=camp_' run/logs/reliefd.log    # structured key=value log
 scripts/reliefctl stop                     # SIGTERM camps, SIGKILL stragglers after 2 s, reap all
 ```
 Set `RELIEF_TIME_SCALE=10` to replay the scenario 10x faster (10 ms per simulated minute).
+
+### Scheduling simulator
+`build/schedsim` replays a scenario through a scheduling policy on N rescue teams (= CPUs), in simulated
+minutes and with no real sleeping, so a run is instant and fully reproducible:
+```sh
+build/schedsim --policy fcfs --scenario scenarios/flood_pune.csv --teams 3 --gantt --csv /tmp/fcfs.csv
+```
+It reports the average waiting, turnaround and response time (overall and per severity), the worst-case
+wait, throughput, team utilisation, context switches and starved requests (wait > `--starve`, default
+120 min). `--gantt` draws the first 60 minutes per team, and `--csv` writes one row per request.
+Policies so far: `fcfs`. SJF, RR, Priority and MLFQ come next in Phase 2.
 
 ### Scenarios
 `scenarios/flood_pune.csv` holds 200 requests across the 8 camps: 15% CRITICAL, 35% URGENT and 50% ROUTINE,
@@ -112,7 +124,7 @@ run it every 10 minutes, add this with `crontab -e`:
 | 2 | IPC (POSIX message queues) | Camps send paced requests over a bounded queue; mq_timedsend back-pressure | 1 |
 | 2, 3 | IPC via POSIX shared memory, process-shared mutex | Live status table `/reliefos_status` read by `reliefstat` (robust mutex + seqlock) | 1 |
 | 2 | Signals as IPC, process control | `reliefctl alert` (SIGUSR1), `dump` (SIGUSR2), graceful SIGTERM; flag-only handlers | 1 |
-| 2 | FCFS, SJF, RR, Priority, MLFQ with aging; SCHED_FIFO/SCHED_RR/nice | Triage scheduler, experiments E1/E2 | 2 |
+| 2 | FCFS, SJF, RR, Priority, MLFQ with aging; SCHED_FIFO/SCHED_RR/nice | Triage scheduler (`src/sched/`, pluggable policies, `schedsim`), experiments E1/E2 | 2 |
 | 3 | Producer-consumer, readers-writers, Peterson's | Warehouse → truck, inventory, two camps / one boat | 3 |
 | 3 | Banker's, wait-for-graph detection + recovery, resource ordering | Deadlock control over trucks/boats | 3 |
 | 4 | First/best/worst fit, buddy system, slab allocator | Warehouse space, pre-packed relief kits | 4 |

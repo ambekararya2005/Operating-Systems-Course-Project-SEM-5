@@ -137,6 +137,37 @@ fork+execv ──▶ STARTING ──HELLO──▶ RUNNING ──exit(n)──�
 - A restarted camp replays its scenario rows. Request ids (`camp_id * 1000000 + csv line`) are
   stable, so the scheduler can de-duplicate them later.
 
+## Phase 2: triage scheduler (`src/sched/`)
+The scheduler is a library with no IPC. Rescue teams play the CPUs and requests the jobs (burst = the
+request's `service_time`). Both `schedsim` (offline experiments) and, later, reliefd (live triage) drive it.
+
+- **`sched_job_t`** holds the request id, camp, severity, arrival, burst, remaining, start, finish, wait,
+  last_run, queue level and team. An intrusive `next` link lets policies queue jobs without allocating.
+- **`sched_policy_t`** is a table of function pointers plus a name and a `preemptive` flag:
+  `init`, `enqueue(job, now)`, `pick_next(now)`, `on_tick(now, running[], teams, preempt[])`,
+  `on_finish(job, now)` and `destroy`. `on_tick` ages ready jobs and marks teams to preempt; it is NULL for
+  FCFS. Policies are registered by name in `sched.c`, so experiments swap them with `--policy`.
+- **`sim_run()`** is a discrete-time simulation with a 1-minute clock that jumps over idle gaps. Each
+  minute it admits arrivals, calls `on_tick` (re-enqueueing preempted jobs), fills idle teams with
+  `pick_next` (team 1 first) and runs every busy team for one minute. Same-minute arrivals keep scenario
+  order unless `--seed` asks for a seeded but reproducible order.
+- **Metrics:**
+
+  | Metric | Definition |
+  |--------|------------|
+  | Turnaround | finish − arrival |
+  | Waiting | turnaround − burst |
+  | Response | first start − arrival |
+  | Throughput | requests per hour of makespan |
+  | Utilisation | busy team-minutes ÷ (teams × makespan) |
+  | Context switch | A team hands over directly from one job to another. Picking up work after being idle does not count. |
+  | Starved | waiting > `--starve` |
+- **FCFS baseline** (flood scenario, 3 teams): average wait 401.9 min, CRITICAL 382.8 min, 166 of 200 starved,
+  98.5% utilisation. The scenario oversubscribes 3 teams, and FCFS ignores severity, which motivates the
+  priority-based policies and experiments E1/E2.
+- `tests/test_sched.c` checks the textbook example (P1=24, P2=3, P3=3 on 1 CPU gives an average wait of 17;
+  reordered P2, P3, P1 gives 3) plus multi-team runs, idle gaps, starvation and tie order.
+
 ## Structured log (`$RELIEF_HOME/logs/reliefd.log`)
 One event per line: `ts=<iso8601> level=<lvl> comp=reliefd pid=<pid> event=<name> key=value ...`.
 Values contain no spaces, except `msg="..."` on free-form `event=log` lines. Events include
@@ -147,4 +178,4 @@ Values contain no spaces, except `msg="..."` on free-form `event=log` lines. Eve
 - [x] Component diagram (Phase 1 process model above)
 - [ ] Request lifecycle (camp → scheduler → allocator → router → journal)
 - [ ] Thread model inside reliefd
-- [ ] Policy plug-in interfaces (function-pointer tables)
+- [x] Policy plug-in interfaces (function-pointer tables): `sched_policy_t`, Phase 2 section above
