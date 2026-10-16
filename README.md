@@ -11,12 +11,14 @@ working demo of the OS syllabus.
 | Trucks / boats  | Shared devices   |
 | Rescue requests | Jobs to schedule |
 
-**Status:** Phase 0 skeleton. `reliefd` and `camp` exchange messages over a POSIX message queue,
-and `reliefctl` can start, stop and query the daemon. No OS algorithms are implemented yet.
+**Status:** Phase 1 (foundation) in progress. `reliefd` is the parent of all camp processes. It
+fork/execs one camp per line of `scenarios/camps.conf`, reaps them on SIGCHLD, restarts crashed
+camps, and shuts them all down cleanly. Camps send their scenario requests over a POSIX message
+queue. No scheduling or resource algorithms are implemented yet.
 
 ## Components
 - `reliefd`: the coordinator daemon (C11, pthreads)
-- `camp`: one process per relief camp. It sends requests to reliefd over `/reliefos_requests`
+- `camp`: one process per relief camp, started by reliefd. It sends requests to reliefd over `/reliefos_requests`
 - `reliefctl`: Bash CLI
 - `relief.ko`: kernel module exposing `/proc/relief` (Phase 6)
 - `systemd/reliefd.service`: systemd unit template (Phase 6)
@@ -30,28 +32,30 @@ sudo apt install build-essential valgrind shellcheck
 ## Build, run, test
 ```sh
 make                 # builds build/reliefd and build/camp
-make test            # smoke test: IPC, determinism, SHUTDOWN and SIGTERM paths, reliefctl
-make tsan            # ThreadSanitizer build (build/tsan/) + smoke test
-make valgrind        # smoke test under valgrind
+make test            # tests/smoke.sh (IPC, reliefctl) + tests/camps.sh (fork/exec, restarts, no zombies)
+make tsan            # ThreadSanitizer build (build/tsan/) + tests
+make valgrind        # tests under valgrind (camps too)
 make clean
 ```
 
 Try it by hand:
 ```sh
-scripts/reliefctl start
+scripts/reliefctl start                    # reliefd + the 8 camps from scenarios/camps.conf
 scripts/reliefctl status
-build/camp --id 1 --count 5 --seed 42      # HELLO, 5 requests, BYE
-tail run/reliefd.log
-scripts/reliefctl stop
+ps --ppid "$(cat run/reliefd.pid)" -o pid,stat,etime,args   # the 8 camp children
+kill -9 <a camp pid>                       # reliefd reaps it and restarts it (max 3 times)
+grep 'event=camp_' run/logs/reliefd.log    # structured key=value log
+scripts/reliefctl stop                     # SIGTERM camps, SIGKILL stragglers after 2 s, reap all
 ```
-Runtime files (the pid file and the log) go in `$RELIEF_HOME`, which defaults to `./run`. You never need root.
+Runtime files go in `$RELIEF_HOME`, which defaults to `./run`: the pid file, `logs/reliefd.log` (key=value)
+and `logs/reliefd.out` (raw stderr). You never need root.
 
 ### reliefctl
 | Command    | Status |
 |------------|--------|
-| `start`    | Starts reliefd in the background |
-| `stop`     | Stops reliefd with SIGTERM |
-| `status`   | Shows whether reliefd is running, with its pid and uptime |
+| `start`    | Starts reliefd and its camps in the background |
+| `stop`     | Stops reliefd with SIGTERM. reliefd stops and reaps every camp |
+| `status`   | Shows whether reliefd is running, with its pid, uptime and number of camps |
 | `ps`       | Coming in Phase 1 |
 | `simulate` | Coming in Phase 2 |
 | `report`   | Coming in Phase 2 |
@@ -60,7 +64,7 @@ Runtime files (the pid file and the log) go in `$RELIEF_HOME`, which defaults to
 | Unit | Topics | ReliefOS feature | Phase |
 |------|--------|------------------|-------|
 | 1 | Shell programming, modular kernels | `reliefctl`, awk reports, cron, `relief.ko` | 1, 6 |
-| 2 | fork/exec/waitpid, process states/PCB, pthreads | Camp processes, `reliefctl ps` via `/proc` | 1 |
+| 2 | fork/exec/waitpid, process states/PCB, pthreads | reliefd supervises camp processes (SIGCHLD reaping, restarts); `reliefctl ps` via `/proc` | 1 |
 | 2 | FCFS, SJF, RR, Priority, MLFQ with aging; SCHED_FIFO/SCHED_RR/nice | Triage scheduler, experiments E1/E2 | 2 |
 | 3 | Producer-consumer, readers-writers, Peterson's | Warehouse → truck, inventory, two camps / one boat | 3 |
 | 3 | Banker's, wait-for-graph detection + recovery, resource ordering | Deadlock control over trucks/boats | 3 |

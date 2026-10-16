@@ -10,13 +10,17 @@ After=local-fs.target
 
 [Service]
 Type=simple
-ExecStart=@RELIEF_PREFIX@/build/reliefd
+ExecStart=@RELIEF_PREFIX@/build/reliefd \
+    --camps @RELIEF_PREFIX@/scenarios/camps.conf \
+    --scenario @RELIEF_PREFIX@/scenarios/flood_pune.csv
+# reliefd stops its camps itself (SIGTERM, 2 s grace, SIGKILL): only signal the main process.
+KillMode=mixed
 Environment=RELIEF_HOME=/var/lib/reliefos
 StateDirectory=reliefos
 Group=relief-admin
 UMask=0007
 KillSignal=SIGTERM
-TimeoutStopSec=5
+TimeoutStopSec=10
 Restart=on-failure
 RestartSec=2
 

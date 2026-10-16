@@ -9,12 +9,18 @@
 #define RELIEF_H
 
 #include <stdint.h>
+#include <string.h>
 
 #define RELIEF_MQ_NAME      "/reliefos_requests"
 #define RELIEF_MQ_MAXMSG    10          /* non-root limit: /proc/sys/fs/mqueue/msg_max */
 #define RELIEF_MSG_SIZE     128
 #define RELIEF_HOME_DEFAULT "./run"
 #define RELIEF_PID_FILE     "reliefd.pid"
+#define RELIEF_LOG_DIR      "logs"          /* under $RELIEF_HOME */
+#define RELIEF_LOG_FILE     "reliefd.log"   /* structured key=value log */
+
+/* Request ids are camp_id * RELIEF_REQ_ID_BASE + sequence, so they are unique and reproducible. */
+#define RELIEF_REQ_ID_BASE  1000000U
 
 /* Triage severity: lower value = more severe. */
 typedef enum {
@@ -79,6 +85,23 @@ static inline const char *relief_resource_name(unsigned r)
         "RESCUE", "FOOD_KIT", "MED_KIT", "HYGIENE_KIT", "TRUCK", "BOAT"
     };
     return r < RES_COUNT ? names[r] : "?";
+}
+
+/* Name -> enum value (as used in scenario CSVs); -1 if unknown. */
+static inline int relief_severity_parse(const char *s)
+{
+    for (unsigned i = 0; i < SEV_COUNT; i++)
+        if (strcmp(s, relief_severity_name(i)) == 0)
+            return (int)i;
+    return -1;
+}
+
+static inline int relief_resource_parse(const char *s)
+{
+    for (unsigned i = 0; i < RES_COUNT; i++)
+        if (strcmp(s, relief_resource_name(i)) == 0)
+            return (int)i;
+    return -1;
 }
 
 static inline const char *relief_msg_kind_name(unsigned k)

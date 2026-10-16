@@ -1,6 +1,6 @@
 # ReliefOS build. Binaries go to $(BUILD)/ (default build/).
 #   make            build reliefd and camp
-#   make test       smoke test (tests/smoke.sh)
+#   make test       tests/smoke.sh (IPC) and tests/camps.sh (process supervision)
 #   make tsan       ThreadSanitizer build in build/tsan/ + smoke test
 #   make valgrind   smoke test with reliefd and camp under valgrind
 #   make run        run reliefd in the foreground (RELIEF_HOME=./run)
@@ -17,14 +17,21 @@ LDLIBS   := -lrt
 
 OBJ        := $(BUILD)/obj
 COMMON_SRC := src/common/log.c
-RELIEFD_SRC := src/reliefd/main.c $(COMMON_SRC)
+RELIEFD_SRC := src/reliefd/main.c src/reliefd/camps.c $(COMMON_SRC)
 CAMP_SRC    := src/camp/main.c $(COMMON_SRC)
 
 RELIEFD_OBJ := $(RELIEFD_SRC:%.c=$(OBJ)/%.o)
 CAMP_OBJ    := $(CAMP_SRC:%.c=$(OBJ)/%.o)
 
+TESTS := tests/smoke.sh tests/camps.sh
+
+# --trace-children: camps exec'd by reliefd also run under valgrind.
 VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
-            --errors-for-leak-kinds=definite,indirect
+            --errors-for-leak-kinds=definite,indirect \
+            --trace-children=yes --child-silent-after-fork=yes
+
+# $(call run_tests,ENV...) runs every test script with the given environment.
+run_tests = for t in $(TESTS); do echo "== $$t"; $(1) $$t || exit 1; done
 
 .PHONY: all reliefd camp clean run test tsan valgrind
 
@@ -47,16 +54,16 @@ run: all
 	RELIEF_HOME=./run ./$(BUILD)/reliefd
 
 test: all
-	BIN_DIR=$(BUILD) tests/smoke.sh
+	$(call run_tests,BIN_DIR=$(BUILD))
 
 # setarch -R disables ASLR for the test processes only: GCC 13's TSan aborts with
 # "unexpected memory mapping" under the high mmap entropy of recent (WSL2) kernels.
 tsan:
 	$(MAKE) BUILD=build/tsan SANFLAGS=-fsanitize=thread OPT=-O1 all
-	BIN_DIR=build/tsan RELIEF_WRAP="setarch $$(uname -m) -R" tests/smoke.sh
+	$(call run_tests,BIN_DIR=build/tsan RELIEF_WRAP="setarch $$(uname -m) -R")
 
 valgrind: all
-	BIN_DIR=$(BUILD) RELIEF_WRAP="$(VALGRIND)" tests/smoke.sh
+	$(call run_tests,BIN_DIR=$(BUILD) RELIEF_WRAP="$(VALGRIND)" TEST_TIMEOUT=30)
 
 clean:
 	rm -rf build

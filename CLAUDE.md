@@ -24,16 +24,19 @@ project is also a working demo of the syllabus. If a feature maps to no topic, d
 
 Layout (folders marked * are created in later phases):
 - `include/`: `relief.h` (shared wire types, see Conventions), `log.h`, `rng.h`
-- `src/reliefd/`, `src/camp/`: one source per program. `src/common/` holds shared code (logger).
-  Add reliefd modules as one file per OS concept
+- `src/reliefd/`: `main.c` (mq loop, signals) plus one module per OS concept, e.g. `camps.c` (process
+  table, fork/exec, SIGCHLD reaping, restarts). `src/camp/`: camp process. `src/common/`: logger
 - `scripts/`: reliefctl, plus awk report scripts and cron entries later
-- `tests/`: `smoke.sh` (run by `make test`, `make tsan` and `make valgrind`)
-- `scenarios/`: workload CSVs (`arrival_min,camp_id,severity,resource,quantity,service_time`)
+- `tests/`: `smoke.sh` (IPC) and `camps.sh` (process supervision), run by `make test`, `tsan` and `valgrind`
+- `scenarios/`: `camps.conf` (`<id> <name>` per line) and workload CSVs
+  (`arrival_min,camp_id,severity,resource,quantity,service_time`)
 - `systemd/`: `reliefd.service` template (not installed until Phase 6)
 - `docs/`: ARCHITECTURE.md, EXPERIMENTS.md
 - `kernel/`*: relief.ko, self-contained with its own Makefile
 - `experiments/`*: experiment drivers. `experiments/results/` holds the CSV output (git-ignored)
 - `build/`: binaries (`build/tsan/` for TSan). `run/`: default `$RELIEF_HOME`. Both are git-ignored
+- `$RELIEF_HOME/logs/`: `reliefd.log` is the structured key=value log
+  (`ts= level= comp= pid= event= ...`, parse it with awk); `reliefd.out` holds the raw stderr
 
 ## Syllabus mapping (keep every feature tied to one of these)
 - **Unit 1**: shell programming (reliefctl, awk reports, cron) and modular kernels (relief.ko)
@@ -78,9 +81,11 @@ Layout (folders marked * are created in later phases):
 
 ## Commands
 - `make` / `make test` / `make tsan` / `make valgrind` / `make clean`. `make run` runs reliefd in the foreground
-- `scripts/reliefctl start|stop|status`. Env vars: `RELIEF_HOME`, `RELIEF_BIN_DIR`, and `RELIEF_WRAP` (a command
-  prefix such as valgrind or strace)
-- `build/camp --id N --count N --seed S`, or `build/camp --shutdown` to stop reliefd
+- `scripts/reliefctl start|stop|status`. Env vars: `RELIEF_HOME`, `RELIEF_BIN_DIR`, `RELIEF_CAMPS`, `RELIEF_SCENARIO`,
+  and `RELIEF_WRAP` (a command prefix such as valgrind or strace)
+- `build/reliefd [--camps FILE] [--scenario FILE] [--seed N] [--camp-bin PATH]`. Use `--camps /dev/null` for no camps
+- `build/camp --id N --scenario FILE` (resident until SIGTERM), `--id N --count N --seed S` (random, exits),
+  or `--shutdown` (stops reliefd)
 - `make tsan` runs under `setarch -R`, because GCC 13 TSan aborts under WSL2's ASLR entropy
 - The queue `/reliefos_requests` is system-wide: only one reliefd can run at a time
 
@@ -95,5 +100,6 @@ Layout (folders marked * are created in later phases):
 Work the phases in order. Within a phase, ship all P0 features before any P1/P2.
 
 ## Current status
-Phase 0 skeleton done: reliefd and camp exchange messages over the mq, and reliefctl supports start/stop/status. In this
-skeleton, camps are launched by hand. reliefd fork/exec of camps is Phase 1. Update this line as phases complete.
+Phase 1 in progress. Step 1 is done: reliefd fork/execs the camps in camps.conf, reaps them on SIGCHLD, restarts
+a crashed camp up to 3 times, and escalates SIGTERM to SIGKILL on shutdown. The structured log is in place.
+Next: `reliefctl ps` via /proc. Update this line as steps complete.

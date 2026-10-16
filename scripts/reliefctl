@@ -5,6 +5,8 @@
 #   RELIEF_HOME     runtime directory (default: <repo>/run)
 #   RELIEF_BIN_DIR  directory holding reliefd (default: <repo>/build)
 #   RELIEF_WRAP     optional command prefix for reliefd, e.g. "strace -f -o trace.txt"
+#   RELIEF_CAMPS    camps config     (default: <repo>/scenarios/camps.conf)
+#   RELIEF_SCENARIO scenario CSV     (default: <repo>/scenarios/flood_pune.csv)
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -14,16 +16,21 @@ RELIEF_HOME=$(cd "$RELIEF_HOME" && pwd)
 export RELIEF_HOME
 BIN_DIR=${RELIEF_BIN_DIR:-$ROOT/build}
 read -r -a WRAP <<< "${RELIEF_WRAP:-}"
+CAMPS=${RELIEF_CAMPS:-$ROOT/scenarios/camps.conf}
+SCENARIO=${RELIEF_SCENARIO:-$ROOT/scenarios/flood_pune.csv}
 PIDFILE="$RELIEF_HOME/reliefd.pid"
-LOGFILE="$RELIEF_HOME/reliefd.log"
+LOGDIR="$RELIEF_HOME/logs"
+OUTFILE="$LOGDIR/reliefd.out"     # raw stderr of reliefd and its camps
+# reliefd itself writes the structured key=value log to $LOGDIR/reliefd.log.
 
 usage() {
     cat <<EOF
 usage: reliefctl <command>
 
 commands:
-  start      start reliefd in the background (log: \$RELIEF_HOME/reliefd.log)
-  stop       stop reliefd (SIGTERM)
+  start      start reliefd and its camps in the background
+             (logs: \$RELIEF_HOME/logs/reliefd.log key=value, reliefd.out raw)
+  stop       stop reliefd (SIGTERM); it stops and reaps all camps
   status     show whether reliefd is running
   ps         list camp processes            (coming in Phase 1)
   simulate   run a scenario through reliefd (coming in Phase 2)
@@ -49,7 +56,9 @@ cmd_start() {
     fi
     [[ -x "$BIN_DIR/reliefd" ]] || { echo "reliefd not built; run 'make' first" >&2; return 1; }
     rm -f "$PIDFILE"
-    nohup "${WRAP[@]}" "$BIN_DIR/reliefd" >>"$LOGFILE" 2>&1 </dev/null &
+    mkdir -p "$LOGDIR"
+    nohup "${WRAP[@]}" "$BIN_DIR/reliefd" --camps "$CAMPS" --scenario "$SCENARIO" \
+        >>"$OUTFILE" 2>&1 </dev/null &
     for _ in $(seq 50); do
         if pid=$(daemon_pid); then
             echo "reliefd started (pid $pid, home $RELIEF_HOME)"
@@ -57,7 +66,7 @@ cmd_start() {
         fi
         sleep 0.1
     done
-    echo "reliefd failed to start; see $LOGFILE" >&2
+    echo "reliefd failed to start; see $OUTFILE" >&2
     return 1
 }
 
@@ -83,7 +92,7 @@ cmd_stop() {
 cmd_status() {
     local pid
     if pid=$(daemon_pid); then
-        echo "running  pid=$pid  uptime=$(ps -o etime= -p "$pid" | tr -d ' ')  home=$RELIEF_HOME"
+        echo "running  pid=$pid  uptime=$(ps -o etime= -p "$pid" | tr -d ' ')  camps=$(ps -o pid= --ppid "$pid" | wc -l)  home=$RELIEF_HOME"
     else
         echo "stopped  home=$RELIEF_HOME"
     fi

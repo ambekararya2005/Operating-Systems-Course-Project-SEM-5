@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Smoke test for the Phase 0 skeleton: reliefd <-> camp over the POSIX message queue.
+# Smoke test: reliefd <-> manually started camps over the POSIX message queue.
+# reliefd runs with an empty camps config here; tests/camps.sh covers supervised camps.
 #   BIN_DIR      directory holding reliefd and camp (default: build)
 #   RELIEF_WRAP  optional command prefix for every binary, e.g. "valgrind --error-exitcode=99"
 set -euo pipefail
@@ -10,7 +11,9 @@ read -r -a WRAP <<< "${RELIEF_WRAP:-}"
 
 RELIEF_HOME=$(mktemp -d "${TMPDIR:-/tmp}/reliefos-test.XXXXXX")
 export RELIEF_HOME
-LOG="$RELIEF_HOME/reliefd.log"
+mkdir -p "$RELIEF_HOME/logs"
+LOG="$RELIEF_HOME/logs/reliefd.log"     # structured key=value
+OUT="$RELIEF_HOME/logs/reliefd.out"     # raw stderr
 PIDFILE="$RELIEF_HOME/reliefd.pid"
 DPID=""
 
@@ -25,8 +28,8 @@ trap cleanup EXIT
 
 fail() {
     echo "FAIL: $*" >&2
-    echo "--- reliefd log ---" >&2
-    cat "$LOG" >&2 2>/dev/null || true
+    echo "--- reliefd stderr ---" >&2
+    cat "$OUT" >&2 2>/dev/null || true
     exit 1
 }
 pass() { echo "ok   $*"; }
@@ -34,7 +37,7 @@ pass() { echo "ok   $*"; }
 count() { grep -c -- "$1" "$2" || true; }
 
 start_reliefd() {
-    "${WRAP[@]}" "$BIN/reliefd" >>"$LOG" 2>&1 &
+    "${WRAP[@]}" "$BIN/reliefd" --camps /dev/null >>"$OUT" 2>&1 &
     DPID=$!
     for _ in $(seq 100); do
         [[ -s "$PIDFILE" ]] && return 0
@@ -72,10 +75,10 @@ run_camp "$RELIEF_HOME/shutdown.log" --shutdown
 wait_reliefd
 pass "reliefd stopped on SHUTDOWN message"
 
-[[ $(count ' HELLO camp=' "$LOG") -eq 4 ]] || fail "expected 4 HELLO"
-[[ $(count ' REQUEST id=' "$LOG") -eq 16 ]] || fail "expected 16 REQUEST"
-[[ $(count ' BYE camp=' "$LOG") -eq 4 ]] || fail "expected 4 BYE"
-grep -q 'stopping: hello=4 request=16 bye=4' "$LOG" || fail "wrong totals"
+[[ $(count ' event=hello ' "$LOG") -eq 4 ]] || fail "expected 4 HELLO"
+[[ $(count ' event=request ' "$LOG") -eq 16 ]] || fail "expected 16 REQUEST"
+[[ $(count ' event=bye ' "$LOG") -eq 4 ]] || fail "expected 4 BYE"
+grep -q 'event=daemon_stop hello=4 request=16 bye=4' "$LOG" || fail "wrong totals"
 pass "reliefd received 4 HELLO, 16 REQUEST, 4 BYE"
 
 [[ ! -e "$PIDFILE" ]] || fail "pid file left behind after SHUTDOWN"
@@ -93,11 +96,11 @@ pass "camp output deterministic for --seed"
 start_reliefd
 kill -TERM "$DPID"
 wait_reliefd
-grep -q 'caught termination signal' "$LOG" || fail "SIGTERM not handled"
+grep -q 'event=shutdown reason=signal sig=15' "$LOG" || fail "SIGTERM not handled"
 [[ ! -e "$PIDFILE" ]] || fail "pid file left behind after SIGTERM"
 pass "reliefd stopped cleanly on SIGTERM"
 
-# 4. reliefctl start / status / stop (reliefctl applies RELIEF_WRAP itself).
+# 4. reliefctl start / status / stop with the real camps config (reliefctl applies RELIEF_WRAP itself).
 CTL="$ROOT/scripts/reliefctl"
 export RELIEF_BIN_DIR="$BIN"
 "$CTL" start >/dev/null || fail "reliefctl start"
