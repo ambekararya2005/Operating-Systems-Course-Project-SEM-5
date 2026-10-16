@@ -8,6 +8,8 @@
 #ifndef RELIEF_H
 #define RELIEF_H
 
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -111,6 +113,61 @@ static inline int relief_resource_parse(const char *s)
             return (int)i;
     return -1;
 }
+
+/* ---- Live status table in POSIX shared memory (Unit 2: IPC, Unit 3: synchronisation) ----
+ *
+ * reliefd creates RELIEF_SHM_NAME and owns the daemon fields plus each camp's pid, state
+ * and restarts; each camp updates only requests_sent and heartbeat_ms in its own row.
+ * Writers hold `lock` (process-shared, robust) and bump `seq` around every write;
+ * read-only readers (reliefstat) cannot lock, so they use `seq` as a seqlock.
+ * See include/shm.h for the access functions.
+ */
+#define RELIEF_SHM_NAME      "/reliefos_status"
+#define RELIEF_SHM_MAGIC     0x534c4552u     /* "RELS" */
+#define RELIEF_SHM_VERSION   1
+#define RELIEF_SHM_CAMPS     64
+#define RELIEF_CAMP_NAME_MAX 32
+
+/* Camp lifecycle state, owned by reliefd. */
+typedef enum {
+    CAMP_STARTING = 0,  /* forked, no HELLO received yet */
+    CAMP_RUNNING,       /* HELLO received from this pid */
+    CAMP_EXITED,        /* terminated normally (or during shutdown) */
+    CAMP_CRASHED,       /* killed by a signal more than the restart limit */
+    CAMP_STATE_COUNT
+} relief_camp_state_t;
+
+static inline const char *relief_camp_state_name(unsigned s)
+{
+    static const char *const names[CAMP_STATE_COUNT] = { "STARTING", "RUNNING", "EXITED", "CRASHED" };
+    return s < CAMP_STATE_COUNT ? names[s] : "?";
+}
+
+typedef struct {
+    uint32_t id;                            /* reliefd */
+    char     name[RELIEF_CAMP_NAME_MAX];    /* reliefd */
+    int32_t  pid;                           /* reliefd */
+    uint32_t state;                         /* reliefd: relief_camp_state_t */
+    uint32_t restarts;                      /* reliefd */
+    uint64_t requests_sent;                 /* camp (reset by reliefd on each (re)start) */
+    int64_t  heartbeat_ms;                  /* camp: CLOCK_REALTIME in ms, 0 = none yet */
+} relief_shm_camp_t;
+
+typedef struct {
+    int32_t  daemon_pid;
+    uint32_t ncamps;
+    int64_t  start_time_ms;                 /* CLOCK_REALTIME in ms */
+    uint64_t total_requests;                /* REQUEST messages received by reliefd */
+    relief_shm_camp_t camps[RELIEF_SHM_CAMPS];
+} relief_status_t;
+
+typedef struct {
+    uint32_t         magic;                 /* RELIEF_SHM_MAGIC once initialised */
+    uint32_t         version;
+    _Atomic uint32_t seq;                   /* seqlock generation: odd while a writer is inside */
+    pthread_mutex_t  lock;                  /* PTHREAD_PROCESS_SHARED + PTHREAD_MUTEX_ROBUST */
+    relief_status_t  data;
+} relief_shm_t;
 
 static inline const char *relief_msg_kind_name(unsigned k)
 {

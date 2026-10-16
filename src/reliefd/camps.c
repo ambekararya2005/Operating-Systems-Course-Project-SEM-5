@@ -5,6 +5,7 @@
 
 #include "log.h"
 #include "relief.h"
+#include "shm.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -23,8 +24,7 @@
 
 const char *camp_state_name(camp_state_t s)
 {
-    static const char *const names[] = { "STARTING", "RUNNING", "EXITED", "CRASHED" };
-    return (unsigned)s < sizeof names / sizeof names[0] ? names[s] : "?";
+    return relief_camp_state_name(s);
 }
 
 static const char *sig_name(int sig)
@@ -272,6 +272,37 @@ void camps_unpublish(camp_table_t *t)
 {
     if (t->pids_path[0] && unlink(t->pids_path) == -1 && errno != ENOENT)
         LOG_WARN("unlink %s: %s", t->pids_path, strerror(errno));
+}
+
+void camps_publish_shm(const camp_table_t *t, relief_shm_t *shm)
+{
+    int rc;
+
+    if (!shm)
+        return;
+    rc = relief_shm_begin_write(shm);
+    if (rc == -1) {
+        LOG_ERROR("status table lock: %s", strerror(errno));
+        return;
+    }
+    if (rc == 1)
+        EV_WARN("status_lock_recovered", "by=reliefd reason=EOWNERDEAD");
+    shm->data.ncamps = (uint32_t)t->n;
+    for (size_t i = 0; i < t->n; i++) {
+        const camp_t *c = &t->camps[i];
+        relief_shm_camp_t *row = &shm->data.camps[i];
+
+        if (row->pid != (int32_t)c->pid) {      /* new process in this slot */
+            row->requests_sent = 0;
+            row->heartbeat_ms = 0;
+        }
+        row->id = c->id;
+        memcpy(row->name, c->name, sizeof row->name);
+        row->pid = (int32_t)c->pid;
+        row->state = (uint32_t)c->state;
+        row->restarts = c->restarts;
+    }
+    relief_shm_end_write(shm);
 }
 
 size_t camps_live(const camp_table_t *t)

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # OS concept: Shell programming — process control via pid files and signals (Unit 1);
-#             signals as IPC to camp processes: SIGUSR1 alert, SIGUSR2 dump (Unit 2)
+#             signals as IPC to camp processes: SIGUSR1 alert, SIGUSR2 dump (Unit 2);
+#             live status read from POSIX shared memory via reliefstat (Unit 2)
 #
 # reliefctl: control the ReliefOS coordinator daemon.
 #   RELIEF_HOME     runtime directory (default: <repo>/run)
 #   RELIEF_BIN_DIR  directory holding reliefd (default: <repo>/build)
-#   RELIEF_WRAP     optional command prefix for reliefd, e.g. "strace -f -o trace.txt"
+#   RELIEF_WRAP     optional command prefix for reliefd and reliefstat, e.g. "strace -f -o trace.txt"
 #   RELIEF_CAMPS    camps config     (default: <repo>/scenarios/camps.conf)
 #   RELIEF_SCENARIO scenario CSV     (default: <repo>/scenarios/flood_pune.csv)
 #   RELIEF_TIME_SCALE  real ms per simulated minute (default: 100; 0 = no pacing)
@@ -35,7 +36,7 @@ commands:
   start      start reliefd and its camps in the background
              (logs: \$RELIEF_HOME/logs/reliefd.log key=value, reliefd.out raw)
   stop       stop reliefd (SIGTERM); it stops and reaps all camps
-  status     show whether reliefd is running
+  status [--json]      reliefd state plus the live camp table from shared memory (reliefstat)
   alert <camp-id|all>  evacuation alert (SIGUSR1): the camp's next 5 requests become CRITICAL
   dump  <camp-id|all>  status dump (SIGUSR2): print the camp's counters
   ps         list camp processes            (coming in Phase 1)
@@ -97,9 +98,17 @@ cmd_stop() {
 }
 
 cmd_status() {
-    local pid
+    local pid stat="$BIN_DIR/reliefstat"
+    if [[ "${1:-}" == --json ]]; then
+        [[ -x "$stat" ]] || { echo "reliefstat not built; run 'make' first" >&2; return 1; }
+        "${WRAP[@]}" "$stat" --json
+        return
+    fi
     if pid=$(daemon_pid); then
         echo "running  pid=$pid  uptime=$(ps -o etime= -p "$pid" | tr -d ' ')  camps=$(ps -o pid= --ppid "$pid" | wc -l)  home=$RELIEF_HOME"
+        if [[ -x "$stat" ]]; then
+            "${WRAP[@]}" "$stat" || echo "(live status table unavailable)" >&2
+        fi
     else
         echo "stopped  home=$RELIEF_HOME"
     fi
@@ -165,7 +174,7 @@ coming() { echo "reliefctl $1: coming in Phase $2"; }
 case "${1:-}" in
     start)    cmd_start ;;
     stop)     cmd_stop ;;
-    status)   cmd_status ;;
+    status)   cmd_status "${2:-}" ;;
     alert)    cmd_alert "${2:-}" ;;
     dump)     cmd_dump "${2:-}" ;;
     ps)       coming ps 1 ;;

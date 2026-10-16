@@ -15,10 +15,15 @@
  *   SIGUSR1  evacuation alert: the next ALERT_ESCALATIONS requests are sent as CRITICAL
  *   SIGUSR2  status dump: log counters (sent, by severity, escalations, uptime)
  *   SIGTERM  graceful exit: finish the send in progress, send BYE, exit 0 (SIGINT likewise)
+ *   SIGALRM  1 s POSIX timer: heartbeat into the shared status table
+ *
+ * Live status (Unit 2/3): the camp attaches to reliefd's POSIX shared memory table and
+ * updates only its own row (requests_sent, heartbeat_ms) under the process-shared mutex.
  */
 #include "log.h"
 #include "relief.h"
 #include "rng.h"
+#include "shm.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -37,6 +42,7 @@
 #define STOP_SEND_TRIES      3       /* extra attempts to finish a send after SIGTERM */
 #define DEFAULT_TIME_SCALE   100     /* ms of real time per simulated minute */
 #define ALERT_ESCALATIONS    5       /* requests escalated to CRITICAL per SIGUSR1 */
+#define HEARTBEAT_SEC        1       /* status table heartbeat period */
 
 /*
  * Signal handlers only set these flags; the main loop does the real work.
@@ -53,10 +59,12 @@
 static volatile sig_atomic_t g_stop = 0;    /* SIGTERM/SIGINT: signal number */
 static volatile sig_atomic_t g_alert = 0;   /* SIGUSR1 pending */
 static volatile sig_atomic_t g_dump = 0;    /* SIGUSR2 pending */
+static volatile sig_atomic_t g_tick = 0;    /* SIGALRM: heartbeat due */
 
 static void on_stop(int sig)  { g_stop = sig; }
 static void on_alert(int sig) { (void)sig; g_alert = 1; }
 static void on_dump(int sig)  { (void)sig; g_dump = 1; }
+static void on_tick(int sig)  { (void)sig; g_tick = 1; }
 
 /* Camp state; touched only by the main flow, never by handlers. */
 typedef struct {
@@ -71,6 +79,10 @@ typedef struct {
     unsigned long   queue_full_retries;
     unsigned        escalate_left;      /* remaining escalations from the latest alert */
     long            rows_total;         /* scenario rows for this camp; -1 in random mode */
+    relief_shm_t   *shm;                /* live status table, NULL if unavailable */
+    int             shm_row;            /* cached index of our row, -1 = not found yet */
+    timer_t         heartbeat_timer;
+    int             have_timer;
 } camp_ctx_t;
 
 static void usage(const char *prog)
@@ -119,6 +131,8 @@ static void install_signal_handlers(void)
     sigaction(SIGUSR1, &sa, NULL);
     sa.sa_handler = on_dump;
     sigaction(SIGUSR2, &sa, NULL);
+    sa.sa_handler = on_tick;
+    sigaction(SIGALRM, &sa, NULL);
 }
 
 static long uptime_ms(const camp_ctx_t *c)
@@ -129,9 +143,86 @@ static long uptime_ms(const camp_ctx_t *c)
            (now.tv_nsec - c->started.tv_nsec) / 1000000L;
 }
 
-/* Act on pending SIGUSR1/SIGUSR2. Called from the main flow only. */
+/*
+ * Write our counters into our row of the shared status table. The row is found by
+ * (id, pid): reliefd fills in the pid right after fork(), so a freshly started camp may
+ * not see its row on the first try and simply retries on the next heartbeat. Matching
+ * the pid also stops a manually started camp from overwriting a supervised camp's row.
+ */
+static void status_update(camp_ctx_t *c)
+{
+    relief_shm_camp_t *rows;
+    int32_t self = (int32_t)getpid();
+    int rc;
+
+    if (!c->shm || (rc = relief_shm_begin_write(c->shm)) == -1)
+        return;
+    if (rc == 1)    /* logging is fine here: we are in the main flow, not a handler */
+        log_event(LOG_LVL_WARN, "status_lock_recovered", "by=camp camp=%u reason=EOWNERDEAD", c->id);
+    rows = c->shm->data.camps;
+    if (c->shm_row < 0 || rows[c->shm_row].id != c->id || rows[c->shm_row].pid != self) {
+        c->shm_row = -1;
+        for (uint32_t i = 0; i < c->shm->data.ncamps && i < RELIEF_SHM_CAMPS; i++) {
+            if (rows[i].id == c->id && rows[i].pid == self) {
+                c->shm_row = (int)i;
+                break;
+            }
+        }
+    }
+    if (c->shm_row >= 0) {
+        rows[c->shm_row].requests_sent = c->sent;
+        rows[c->shm_row].heartbeat_ms = relief_now_ms();
+    }
+    relief_shm_end_write(c->shm);
+}
+
+/* Attach to the status table and start the heartbeat timer (best effort). */
+static void status_start(camp_ctx_t *c)
+{
+    struct sigevent sev;
+    struct itimerspec its;
+
+    c->shm_row = -1;
+    c->shm = relief_shm_open(1);
+    if (!c->shm) {
+        LOG_WARN("status table %s unavailable (%s): running without live status",
+                 RELIEF_SHM_NAME, strerror(errno));
+        return;
+    }
+    memset(&sev, 0, sizeof sev);
+    sev.sigev_notify = SIGEV_SIGNAL;
+    sev.sigev_signo = SIGALRM;
+    if (timer_create(CLOCK_MONOTONIC, &sev, &c->heartbeat_timer) == -1) {
+        LOG_WARN("timer_create: %s: no heartbeat", strerror(errno));
+        return;
+    }
+    c->have_timer = 1;
+    memset(&its, 0, sizeof its);
+    its.it_value.tv_sec = HEARTBEAT_SEC;
+    its.it_interval.tv_sec = HEARTBEAT_SEC;
+    timer_settime(c->heartbeat_timer, 0, &its, NULL);
+    status_update(c);
+}
+
+static void status_stop(camp_ctx_t *c)
+{
+    if (c->have_timer)
+        timer_delete(c->heartbeat_timer);
+    c->have_timer = 0;
+    if (c->shm) {
+        status_update(c);
+        relief_shm_close(c->shm);
+    }
+    c->shm = NULL;
+}
+
+/* Act on pending SIGUSR1/SIGUSR2/SIGALRM. Called from the main flow only. */
 static void service_signals(camp_ctx_t *c)
 {
+    if (g_tick) {
+        g_tick = 0;
+        status_update(c);
+    }
     if (g_alert) {
         g_alert = 0;
         c->alerts++;
@@ -229,6 +320,7 @@ static int send_request(camp_ctx_t *c, const relief_request_t *req)
 
     c->sent++;
     c->by_sev[q->severity]++;
+    status_update(c);
     LOG_INFO("sent REQUEST id=%u severity=%s resource=%s qty=%u service=%u arrival=%u%s",
              q->id, relief_severity_name(q->severity), relief_resource_name(q->resource),
              q->quantity, q->service_time, q->arrival,
@@ -386,7 +478,7 @@ static long send_scenario(camp_ctx_t *c, const char *path, unsigned long time_sc
     return rc < 0 ? -1 : (long)c->sent;
 }
 
-/* Idle until SIGTERM/SIGINT, still answering SIGUSR1/SIGUSR2. All four signals are
+/* Idle until SIGTERM/SIGINT, still answering SIGUSR1/SIGUSR2/SIGALRM. These signals are
  * blocked between checking the flags and sigsuspend(), so none can slip through the gap. */
 static void wait_for_stop(camp_ctx_t *c)
 {
@@ -397,6 +489,7 @@ static void wait_for_stop(camp_ctx_t *c)
     sigaddset(&block, SIGINT);
     sigaddset(&block, SIGUSR1);
     sigaddset(&block, SIGUSR2);
+    sigaddset(&block, SIGALRM);
     sigprocmask(SIG_BLOCK, &block, &old);
     for (;;) {
         service_signals(c);
@@ -496,7 +589,9 @@ int main(int argc, char **argv)
         return rc;
     }
 
+    status_start(&camp);
     if (send_simple(&camp, MSG_HELLO, 0) == -1) {
+        status_stop(&camp);
         mq_close(camp.mq);
         return g_stop ? EXIT_SUCCESS : EXIT_FAILURE;
     }
@@ -518,6 +613,7 @@ int main(int argc, char **argv)
         rc = EXIT_FAILURE;
     LOG_INFO("done: camp=%u sent=%lu escalated=%lu%s", camp.id, camp.sent, camp.escalated,
              g_stop ? " (stopped by signal)" : "");
+    status_stop(&camp);
     mq_close(camp.mq);
     return rc;
 }

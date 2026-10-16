@@ -8,22 +8,19 @@
 #ifndef RELIEFD_CAMPS_H
 #define RELIEFD_CAMPS_H
 
+#include "relief.h"
+
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
 #include <time.h>
 
-#define CAMPS_MAX          64
-#define CAMP_NAME_MAX      32
+#define CAMPS_MAX          RELIEF_SHM_CAMPS
+#define CAMP_NAME_MAX      RELIEF_CAMP_NAME_MAX
 #define CAMP_MAX_RESTARTS  3
 #define CAMPS_PATH_MAX     4096
 
-typedef enum {
-    CAMP_STARTING = 0,  /* forked, no HELLO received yet */
-    CAMP_RUNNING,       /* HELLO received from this pid */
-    CAMP_EXITED,        /* terminated normally (or during shutdown) */
-    CAMP_CRASHED        /* killed by a signal more than CAMP_MAX_RESTARTS times */
-} camp_state_t;
+typedef relief_camp_state_t camp_state_t;   /* shared with reliefstat via relief.h */
 
 typedef struct {
     uint32_t        id;
@@ -69,6 +66,10 @@ int camps_save(camp_table_t *t);
 
 /* Remove the published table (on shutdown, once camps are no longer controllable). */
 void camps_unpublish(camp_table_t *t);
+
+/* Copy reliefd-owned fields (id, name, pid, state, restarts) into the shared status table.
+ * A row whose pid changed (new or restarted camp) gets its camp-owned counters reset. */
+void camps_publish_shm(const camp_table_t *t, relief_shm_t *shm);
 
 /* Number of camps with a live process (STARTING or RUNNING). */
 size_t camps_live(const camp_table_t *t);

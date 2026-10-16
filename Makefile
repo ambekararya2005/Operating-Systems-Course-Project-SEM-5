@@ -1,6 +1,6 @@
 # ReliefOS build. Binaries go to $(BUILD)/ (default build/).
-#   make            build reliefd and camp
-#   make test       tests/{smoke,camps,traffic,signals}.sh: IPC, supervision, paced traffic, signals
+#   make            build reliefd, camp and reliefstat
+#   make test       tests/{smoke,camps,traffic,signals,status}.sh: IPC, supervision, traffic, signals, shm
 #   make tsan       ThreadSanitizer build in build/tsan/ + tests
 #   make valgrind   tests with reliefd and camps under valgrind
 #   make run        run reliefd in the foreground (RELIEF_HOME=./run)
@@ -16,14 +16,19 @@ LDFLAGS  := -pthread $(SANFLAGS)
 LDLIBS   := -lrt
 
 OBJ        := $(BUILD)/obj
-COMMON_SRC := src/common/log.c
+COMMON_SRC := src/common/log.c src/common/shm.c
 RELIEFD_SRC := src/reliefd/main.c src/reliefd/camps.c $(COMMON_SRC)
 CAMP_SRC    := src/camp/main.c $(COMMON_SRC)
+RELIEFSTAT_SRC := src/reliefstat/main.c src/common/shm.c
 
 RELIEFD_OBJ := $(RELIEFD_SRC:%.c=$(OBJ)/%.o)
 CAMP_OBJ    := $(CAMP_SRC:%.c=$(OBJ)/%.o)
+RELIEFSTAT_OBJ := $(RELIEFSTAT_SRC:%.c=$(OBJ)/%.o)
+# Test helpers (built with the programs, used by tests/*.sh).
+SHM_DIE_SRC := tests/helpers/shm_die_locked.c src/common/shm.c
+SHM_DIE_OBJ := $(SHM_DIE_SRC:%.c=$(OBJ)/%.o)
 
-TESTS := tests/smoke.sh tests/camps.sh tests/traffic.sh tests/signals.sh
+TESTS := tests/smoke.sh tests/camps.sh tests/traffic.sh tests/signals.sh tests/status.sh
 
 # --trace-children: camps exec'd by reliefd also run under valgrind.
 VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
@@ -33,17 +38,24 @@ VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
 # $(call run_tests,ENV...) runs every test script with the given environment.
 run_tests = for t in $(TESTS); do echo "== $$t"; $(1) $$t || exit 1; done
 
-.PHONY: all reliefd camp clean run test tsan valgrind
+.PHONY: all reliefd camp reliefstat clean run test tsan valgrind
 
-all: reliefd camp
+all: reliefd camp reliefstat $(BUILD)/shm_die_locked
 
 reliefd: $(BUILD)/reliefd
 camp: $(BUILD)/camp
+reliefstat: $(BUILD)/reliefstat
 
 $(BUILD)/reliefd: $(RELIEFD_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/camp: $(CAMP_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/reliefstat: $(RELIEFSTAT_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/shm_die_locked: $(SHM_DIE_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(OBJ)/%.o: %.c
@@ -68,4 +80,4 @@ valgrind: all
 clean:
 	rm -rf build
 
--include $(RELIEFD_OBJ:.o=.d) $(CAMP_OBJ:.o=.d)
+-include $(RELIEFD_OBJ:.o=.d) $(CAMP_OBJ:.o=.d) $(RELIEFSTAT_OBJ:.o=.d) $(SHM_DIE_OBJ:.o=.d)

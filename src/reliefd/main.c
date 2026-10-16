@@ -12,6 +12,7 @@
 #include "camps.h"
 #include "log.h"
 #include "relief.h"
+#include "shm.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -136,6 +137,7 @@ static int default_camp_bin(char *out, size_t len)
 
 typedef struct {
     unsigned long counts[MSG_SHUTDOWN + 1];
+    relief_shm_t *shm;      /* live status table (total_requests) */
 } stats_t;
 
 /* Handle one message. Returns 1 if it was SHUTDOWN. */
@@ -160,6 +162,10 @@ static int handle_message(const relief_msg_t *m, camp_table_t *camps, stats_t *s
                 r->id, r->camp_id, r->camp_pid, relief_severity_name(r->severity),
                 relief_resource_name(r->resource), r->quantity, r->service_time, r->arrival,
                 (r->flags & REQ_FLAG_ALERT) ? 1 : 0, relief_severity_name(r->orig_severity));
+        if (st->shm && relief_shm_begin_write(st->shm) != -1) {
+            st->shm->data.total_requests++;
+            relief_shm_end_write(st->shm);
+        }
         return 0;
     case MSG_SHUTDOWN:
         EV_INFO("shutdown_request", "from_pid=%d", m->camp_pid);
@@ -223,7 +229,7 @@ int main(int argc, char **argv)
     const char *camp_bin = NULL;
     const char *home = getenv("RELIEF_HOME");
     char pidpath[CAMPS_PATH_MAX], logdir[CAMPS_PATH_MAX], logpath[CAMPS_PATH_MAX];
-    stats_t st = { { 0 } };
+    stats_t st = { { 0 }, NULL };
     struct mq_attr attr;
     long other_pid = 0;
     mqd_t mq;
@@ -320,15 +326,34 @@ int main(int argc, char **argv)
         goto fail_log;
     }
 
+    /* Live status table in POSIX shared memory; camps attach to it at startup. */
+    if (relief_shm_unlink_stale())
+        EV_WARN("stale_shm_removed", "name=%s", RELIEF_SHM_NAME);
+    st.shm = relief_shm_create();
+    if (!st.shm) {
+        LOG_ERROR("shm %s: %s", RELIEF_SHM_NAME, strerror(errno));
+        mq_close(mq);
+        mq_unlink(RELIEF_MQ_NAME);
+        goto fail_log;
+    }
+    if (relief_shm_begin_write(st.shm) != -1) {
+        st.shm->data.daemon_pid = (int32_t)getpid();
+        st.shm->data.start_time_ms = relief_now_ms();
+        relief_shm_end_write(st.shm);
+    }
+
     if (install_signal_handlers() == -1 || write_pidfile(pidpath) == -1) {
+        relief_shm_destroy(st.shm);
         mq_close(mq);
         mq_unlink(RELIEF_MQ_NAME);
         goto fail_log;
     }
 
-    EV_INFO("daemon_start", "queue=%s home=%s camps=%zu scenario=%s seed=%lu time_scale_ms=%lu",
-            RELIEF_MQ_NAME, home, camps.n, camps.scenario, camps.seed, camps.time_scale_ms);
+    EV_INFO("daemon_start", "queue=%s shm=%s home=%s camps=%zu scenario=%s seed=%lu time_scale_ms=%lu",
+            RELIEF_MQ_NAME, RELIEF_SHM_NAME, home, camps.n, camps.scenario, camps.seed,
+            camps.time_scale_ms);
     camps_spawn_all(&camps);
+    camps_publish_shm(&camps, st.shm);
     camps_save(&camps);
 
     /* Main loop. SIGCHLD/SIGTERM interrupt mq_timedreceive (EINTR), so reaping and
@@ -340,8 +365,10 @@ int main(int argc, char **argv)
             g_child = 0;            /* clear before reaping so no SIGCHLD is lost */
             camps_reap(&camps, 0);
         }
-        if (camps.dirty)
-            camps_save(&camps);     /* keep camps.pids current for reliefctl alert/dump */
+        if (camps.dirty) {          /* keep the status table and camps.pids current */
+            camps_publish_shm(&camps, st.shm);
+            camps_save(&camps);
+        }
         r = receive_one(mq, RECV_TIMEOUT_MS, &camps, &st);
         if (r == RECV_ERROR) {
             rc = EXIT_FAILURE;
@@ -385,6 +412,9 @@ int main(int argc, char **argv)
     EV_INFO("daemon_stop", "hello=%lu request=%lu bye=%lu",
             st.counts[MSG_HELLO], st.counts[MSG_REQUEST], st.counts[MSG_BYE]);
 
+    camps_publish_shm(&camps, st.shm);     /* final states, for anyone still reading */
+    if (relief_shm_destroy(st.shm) == -1)
+        LOG_WARN("shm_unlink %s: %s", RELIEF_SHM_NAME, strerror(errno));
     mq_close(mq);
     if (mq_unlink(RELIEF_MQ_NAME) == -1)
         LOG_WARN("mq_unlink: %s", strerror(errno));

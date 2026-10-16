@@ -35,7 +35,8 @@ sudo apt install build-essential valgrind shellcheck
 make                 # builds build/reliefd and build/camp
 make test            # tests/smoke.sh (IPC, reliefctl), tests/camps.sh (fork/exec, restarts, no zombies),
                      # tests/traffic.sh (200-row paced replay, queue-full retries),
-                     # tests/signals.sh (alert, dump, graceful SIGTERM)
+                     # tests/signals.sh (alert, dump, graceful SIGTERM),
+                     # tests/status.sh (shared-memory status table, robust mutex recovery)
 make tsan            # ThreadSanitizer build (build/tsan/) + tests
 make valgrind        # tests under valgrind (camps too)
 make clean
@@ -44,7 +45,8 @@ make clean
 Try it by hand:
 ```sh
 scripts/reliefctl start                    # reliefd + the 8 camps from scenarios/camps.conf
-scripts/reliefctl status
+scripts/reliefctl status                   # live table from shared memory (run it again: counts move)
+build/reliefstat --json                    # the same table as JSON
 ps --ppid "$(cat run/reliefd.pid)" -o pid,stat,etime,args   # the 8 camp children
 kill -9 <a camp pid>                       # reliefd reaps it and restarts it (max 3 times)
 grep -c 'event=request ' run/logs/reliefd.log   # climbs to 200 over ~36 s (360 simulated minutes)
@@ -74,7 +76,7 @@ and `logs/reliefd.out` (raw stderr). You never need root.
 |------------|--------|
 | `start`    | Starts reliefd and its camps in the background |
 | `stop`     | Stops reliefd with SIGTERM. reliefd stops and reaps every camp |
-| `status`   | Shows whether reliefd is running, with its pid, uptime and number of camps |
+| `status [--json]` | Shows whether reliefd is running, then the live camp table from shared memory (`reliefstat`): pid, state, requests sent, heartbeat, restarts |
 | `alert <id\|all>` | Evacuation alert (SIGUSR1). The camp's next 5 requests are sent as CRITICAL |
 | `dump <id\|all>`  | Status dump (SIGUSR2). Prints each camp's counters: sent, by severity, escalations, uptime |
 | `ps`       | Coming in Phase 1 |
@@ -87,6 +89,7 @@ and `logs/reliefd.out` (raw stderr). You never need root.
 | 1 | Shell programming, modular kernels | `reliefctl`, awk reports, cron, `relief.ko` | 1, 6 |
 | 2 | fork/exec/waitpid, process states/PCB, pthreads | reliefd supervises camp processes (SIGCHLD reaping, restarts); `reliefctl ps` via `/proc` | 1 |
 | 2 | IPC (POSIX message queues) | Camps send paced requests over a bounded queue; mq_timedsend back-pressure | 1 |
+| 2, 3 | IPC via POSIX shared memory, process-shared mutex | Live status table `/reliefos_status` read by `reliefstat` (robust mutex + seqlock) | 1 |
 | 2 | Signals as IPC, process control | `reliefctl alert` (SIGUSR1), `dump` (SIGUSR2), graceful SIGTERM; flag-only handlers | 1 |
 | 2 | FCFS, SJF, RR, Priority, MLFQ with aging; SCHED_FIFO/SCHED_RR/nice | Triage scheduler, experiments E1/E2 | 2 |
 | 3 | Producer-consumer, readers-writers, Peterson's | Warehouse → truck, inventory, two camps / one boat | 3 |

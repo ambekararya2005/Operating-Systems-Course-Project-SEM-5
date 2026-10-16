@@ -46,6 +46,29 @@ admin ──SHUTDOWN (camp --shutdown) or SIGTERM (reliefctl stop)────�
 - reliefctl gets pids from `$RELIEF_HOME/camps.pids`, which reliefd rewrites atomically
   (write a temp file, then `rename(2)`). It only signals pids whose parent is reliefd.
 
+## Live status table (Phase 1, `include/shm.h`, `src/common/shm.c`, `src/reliefstat/`)
+reliefd creates the POSIX shared memory object `/reliefos_status` (`shm_open` + `ftruncate` + `mmap`, mode 0644)
+before it spawns any camp. The layout is `relief_shm_t` in `relief.h`.
+
+| Field | Written by |
+|-------|------------|
+| `daemon_pid`, `start_time_ms`, `total_requests` (+1 per REQUEST received) | reliefd |
+| per camp: `id`, `name`, `pid`, `state`, `restarts` (on every camp-table change) | reliefd |
+| per camp: `requests_sent`, `heartbeat_ms` (after every send and once a second) | that camp, in its own row only |
+
+- **Writers** lock a `pthread_mutex_t` that lives in the segment, created with `PTHREAD_PROCESS_SHARED` and
+  `PTHREAD_MUTEX_ROBUST`. A camp killed while holding it does not freeze the table: the next locker gets
+  `EOWNERDEAD`, repairs it and logs `event=status_lock_recovered`. `tests/helpers/shm_die_locked` tests this.
+- **Readers** (`reliefstat`) map the segment `PROT_READ` and cannot lock, because locking writes to the
+  mutex. Writers also bump a sequence counter (odd while writing), and the reader copies the table and
+  retries if the counter changed. This is a seqlock. Phase 3 will compare this design with POSIX semaphores.
+- A camp finds its row by (id, pid), so a manually started camp can never overwrite a supervised camp's row.
+  A restarted camp's counters are reset by reliefd when the row's pid changes.
+- The camp heartbeat comes from a `timer_create` timer (SIGALRM every second, flag-only handler), so it
+  keeps beating while the camp is sleeping or idle in `sigsuspend`.
+- reliefd unlinks the segment on shutdown. If reliefd is SIGKILLed, `reliefstat` reports a stale table,
+  and the next reliefd removes the segment and creates a fresh one.
+
 ## Camp process lifecycle (Phase 1, `src/reliefd/camps.c`)
 ```
 fork+execv ──▶ STARTING ──HELLO──▶ RUNNING ──exit(n)──────────────▶ EXITED
