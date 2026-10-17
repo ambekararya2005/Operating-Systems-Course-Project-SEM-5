@@ -4,6 +4,7 @@
 #                   + tests/sched.sh (build/test_sched unit tests, schedsim)
 #                   + tests/dispatch.sh (reliefd rescue-team threads, live scheduling)
 #                   + tests/linuxsched.sh (real Linux scheduling classes, watchdog)
+#                   + tests/phase2_check.sh (gate M2: every policy consistent and deterministic)
 #   make tsan       ThreadSanitizer build in build/tsan/ + tests
 #   make valgrind   tests with reliefd and camps under valgrind
 #   make run        run reliefd in the foreground (RELIEF_HOME=./run)
@@ -48,7 +49,7 @@ SHM_DIE_SRC := tests/helpers/shm_die_locked.c src/common/shm.c
 SHM_DIE_OBJ := $(SHM_DIE_SRC:%.c=$(OBJ)/%.o)
 
 TESTS := tests/smoke.sh tests/camps.sh tests/traffic.sh tests/signals.sh tests/status.sh tests/cli.sh \
-         tests/phase1_smoke.sh tests/sched.sh tests/dispatch.sh tests/linuxsched.sh
+         tests/phase1_smoke.sh tests/sched.sh tests/dispatch.sh tests/linuxsched.sh tests/phase2_check.sh
 
 # --trace-children: camps exec'd by reliefd also run under valgrind.
 VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \

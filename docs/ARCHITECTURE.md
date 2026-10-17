@@ -9,6 +9,8 @@
 - **camp**: one process per relief camp; client of the request queue
 - **reliefctl**: Bash control CLI
 - **reliefstat**: read-only viewer of the live status table
+- **schedsim**: offline, deterministic scheduling simulator (Phase 2)
+- **linuxsched**: real threads under the Linux scheduler (CFS/EEVDF + nice, SCHED_FIFO, SCHED_RR) for E2
 - **relief.ko**: kernel module exposing `/proc/relief` (Phase 6)
 
 ## Phase 1: process model and IPC
@@ -136,6 +138,92 @@ fork+execv ──▶ STARTING ──HELLO──▶ RUNNING ──exit(n)──�
   SIGKILL any stragglers and a blocking `waitpid` until ECHILD (no zombies).
 - A restarted camp replays its scenario rows. Request ids (`camp_id * 1000000 + csv line`) are
   stable, so the scheduler can de-duplicate them later.
+
+## Phase 2: scheduling (overview)
+Phase 2 adds CPU scheduling. Rescue **teams are CPUs** and RESCUE **requests are jobs**, with burst = the
+request's service time. The same policy code runs offline in a simulator and live inside reliefd, and
+E2 measures the real Linux scheduler for comparison.
+
+### The scheduler interface (`src/sched/sched.h`)
+A policy is a table of function pointers, so callers never know which algorithm they are using:
+
+```c
+struct sched_policy {
+    const char *name;  int preemptive;  int uses_quantum;  void *state;  sched_params_t params;
+    int          (*init)(sched_policy_t *, const sched_params_t *);
+    void         (*enqueue)(sched_policy_t *, sched_job_t *, int64_t now);   /* arrival or preempted */
+    sched_job_t *(*pick_next)(sched_policy_t *, int64_t now);                /* for an idle team */
+    void         (*on_tick)(sched_policy_t *, int64_t now,                   /* aging + preemption marks */
+                            sched_job_t *const *running, int teams, int *preempt);
+    void         (*on_finish)(sched_policy_t *, sched_job_t *, int64_t now);
+    void         (*destroy)(sched_policy_t *);
+    int          (*queue_lengths)(sched_policy_t *, uint64_t *out, int max); /* optional, for display */
+};
+```
+There are six policies in six files (`fcfs`, `sjf`, `srtf`, `rr`, `prio`, `mlfq`), registered by name in
+`sched.c`. The policies never sleep, never lock and never do I/O. They report promotions and demotions
+through a callback (`params.on_event`), so the same code works in a single-threaded simulator and
+under the dispatcher's mutex.
+
+### One policy library, three users
+```
+                       src/sched/  (fcfs sjf srtf rr prio mlfq, sched.c registry)
+                         |  same function-pointer table  |
+            +------------+                               +--------------+
+            v                                                           v
+  schedsim / test_sched  (sim.c)                         reliefd dispatcher  (dispatch.c)
+  simulated clock, 1-minute ticks,                       real time: N team pthreads +
+  no sleeping, deterministic                             1 clock thread, mutex + condvar
+  -> E1, unit tests, phase2_check                        -> live RESCUE requests from the mq
+
+  linuxsched  (src/linuxsched/)  uses NO policy from src/sched: one real thread per request on one
+  pinned CPU, and the KERNEL schedules them (CFS/EEVDF + nice, SCHED_FIFO, SCHED_RR) -> E2
+```
+
+### Simulator vs live
+| | `schedsim` (offline) | reliefd dispatcher (live) |
+|---|---|---|
+| Time | Simulated minutes; the loop jumps over idle gaps | Real time: 1 simulated minute = `--time-scale` ms |
+| Teams | An array of slots in one thread | One pthread per team |
+| `on_tick` | Called by the loop once per minute | Called by the clock thread once per minute |
+| Preemption | Takes effect at the same minute boundary | The team acts at its next minute boundary (≤ 1 minute later) |
+| Determinism | Byte-identical for a given `--seed` | Varies slightly with thread timing |
+| Output | Report, per-request CSV, `--summary-csv` row | `event=dispatch/preempt/complete/promote` log, `reliefctl sched`, `report` |
+| Used for | E1, unit tests, `tests/phase2_check.sh` | The running system (`reliefctl simulate --policy P`) |
+
+### Thread model of reliefd
+```
+                 SIGCHLD, SIGTERM (only the main thread: workers block all signals)
+                         |
+  camps --mq--> [ main thread ] --RESCUE--> dispatch_submit ---+
+                  fork/exec, reap                              |  lock(d->lock)
+                                                               v
+       +------------- d->lock (mutex) guards everything below -------------+
+       |  policy ready queues | running[t] | preempt[t] | job fields      |
+       +------^-------------------^---------------------^------------------+
+              | on_tick each      | pick_next / enqueue  | cond_wait(d->work)
+              | simulated minute  | (preempted job back) | when idle
+       [ clock thread ]     [ team 1 ] [ team 2 ] ... [ team N ]
+                              work: nanosleep 1 minute OUTSIDE the lock, then update job inside it
+       publish_locked() --> shm /reliefos_status   (lock order: d->lock, then the shm lock)
+```
+- **One mutex, one condition variable.** Idle teams wait on `d->work`, which is signalled on enqueue and
+  broadcast on preemption or stop. Teams never sleep while holding the lock.
+- **Lock order** is always the dispatcher mutex, then the shared-memory status lock. The main thread
+  takes the shm lock without the dispatcher mutex, so there is no cycle.
+- **Fork safety:** camps are forked only by the main thread, and the child calls only async-signal-safe
+  functions before `execv`.
+
+### Verified by
+- `tests/test_sched.c` (138 checks): textbook answers worked out by hand (FCFS 17 / 3, SJF 7.75, SRTF 6.5,
+  RR q=4 5.67, priority, MLFQ demotion and aging) and a Gantt chart for each.
+- `tests/sched.sh`: every policy on the flood scenario.
+- `tests/phase2_check.sh` (gate M2): every policy completes each request exactly once, never finishes
+  before arrival + burst, and is byte-identical across same-seed runs; MLFQ starves no one at light load.
+- `tests/dispatch.sh`: the live threads (FCFS order, priority preemption, MLFQ aging, clean stop).
+  It fails on any ThreadSanitizer report.
+- `tests/linuxsched.sh`: pinning, CPU-time budget, nice spacing, real-time priorities, watchdog.
+- Results: E1 and E2 in `docs/EXPERIMENTS.md`.
 
 ## Phase 2: triage scheduler (`src/sched/`)
 The scheduler is a library with no IPC. Rescue teams play the CPUs and requests the jobs (burst = the
