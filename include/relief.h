@@ -124,9 +124,12 @@ static inline int relief_resource_parse(const char *s)
  */
 #define RELIEF_SHM_NAME      "/reliefos_status"
 #define RELIEF_SHM_MAGIC     0x534c4552u     /* "RELS" */
-#define RELIEF_SHM_VERSION   1
+#define RELIEF_SHM_VERSION   2
 #define RELIEF_SHM_CAMPS     64
 #define RELIEF_CAMP_NAME_MAX 32
+#define RELIEF_SHM_TEAMS     16     /* max rescue team threads (reliefd --teams) */
+#define RELIEF_SHM_LEVELS    3      /* ready-queue levels shown (MLFQ Q0..Q2, prio severities) */
+#define RELIEF_POLICY_MAX    32
 
 /* Camp lifecycle state, owned by reliefd. */
 typedef enum {
@@ -153,12 +156,32 @@ typedef struct {
     int64_t  heartbeat_ms;                  /* camp: CLOCK_REALTIME in ms, 0 = none yet */
 } relief_shm_camp_t;
 
+/* One rescue team thread of reliefd's live scheduler (Phase 2). Written by reliefd only. */
+typedef struct {
+    uint32_t state;                         /* 0 = idle, 1 = busy */
+    uint32_t job_id;                        /* request being worked on (busy) */
+    uint32_t camp;
+    uint8_t  severity;                      /* relief_severity_t */
+    uint8_t  level;                         /* policy queue level of the job (MLFQ) */
+    uint16_t _pad;
+    int64_t  remaining;                     /* simulated minutes of work left */
+    int64_t  busy_since_ms;                 /* CLOCK_REALTIME ms of this dispatch */
+    uint64_t completed;                     /* requests this team has finished */
+} relief_shm_team_t;
+
 typedef struct {
     int32_t  daemon_pid;
     uint32_t ncamps;
     int64_t  start_time_ms;                 /* CLOCK_REALTIME in ms */
     uint64_t total_requests;                /* REQUEST messages received by reliefd */
     relief_shm_camp_t camps[RELIEF_SHM_CAMPS];
+    /* Live scheduler (reliefd dispatcher, Phase 2) */
+    char     policy[RELIEF_POLICY_MAX];
+    uint32_t nteams;
+    uint32_t nlevels;                       /* entries used in queue_len */
+    uint64_t queue_len[RELIEF_SHM_LEVELS];  /* ready requests per level, highest first */
+    uint64_t sched_enqueued, sched_completed, sched_preemptions, sched_promotions;
+    relief_shm_team_t teams[RELIEF_SHM_TEAMS];
 } relief_status_t;
 
 typedef struct {

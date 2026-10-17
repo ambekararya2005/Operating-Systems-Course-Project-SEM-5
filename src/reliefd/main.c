@@ -10,6 +10,7 @@
  * The triage scheduler, deadlock control, allocators etc. arrive in later phases.
  */
 #include "camps.h"
+#include "dispatch.h"
 #include "log.h"
 #include "relief.h"
 #include "shm.h"
@@ -33,6 +34,10 @@
 #define DEFAULT_CAMPS_CONF   "scenarios/camps.conf"
 #define DEFAULT_SCENARIO     "scenarios/flood_pune.csv"
 #define DEFAULT_TIME_SCALE   100     /* ms of real time per simulated minute */
+#define DEFAULT_POLICY       "fcfs"
+#define DEFAULT_TEAMS        3
+#define DEFAULT_QUANTUM      10      /* simulated minutes, RR */
+#define DEFAULT_AGE          60      /* simulated minutes, MLFQ aging */
 
 static volatile sig_atomic_t g_stop = 0;     /* signal number that requested shutdown */
 static volatile sig_atomic_t g_child = 0;    /* SIGCHLD seen: reap in the main loop */
@@ -138,6 +143,7 @@ static int default_camp_bin(char *out, size_t len)
 typedef struct {
     unsigned long counts[MSG_SHUTDOWN + 1];
     relief_shm_t *shm;      /* live status table (total_requests) */
+    dispatcher_t *disp;     /* live scheduler: RESCUE requests go here */
 } stats_t;
 
 /* Lock the status table. Every reliefd lock site goes through here, so a robust-mutex
@@ -166,17 +172,23 @@ static int handle_message(const relief_msg_t *m, camp_table_t *camps, stats_t *s
     case MSG_BYE:
         EV_INFO("bye", "camp=%u camp_pid=%d", m->camp_id, m->camp_pid);
         return 0;
-    case MSG_REQUEST:
+    case MSG_REQUEST: {
+        /* Only RESCUE requests are CPU-scheduled jobs (teams = CPUs). Kit and vehicle requests
+         * are logged only: allocation and devices are Phase 3/4. */
+        int sched = r->resource == RES_RESCUE && st->disp != NULL;
         EV_INFO("request", "id=%u camp=%u camp_pid=%d severity=%s resource=%s qty=%u service=%u "
-                "arrival=%u alert=%d orig_severity=%s",
+                "arrival=%u alert=%d orig_severity=%s sched=%d",
                 r->id, r->camp_id, r->camp_pid, relief_severity_name(r->severity),
                 relief_resource_name(r->resource), r->quantity, r->service_time, r->arrival,
-                (r->flags & REQ_FLAG_ALERT) ? 1 : 0, relief_severity_name(r->orig_severity));
+                (r->flags & REQ_FLAG_ALERT) ? 1 : 0, relief_severity_name(r->orig_severity), sched);
+        if (sched)
+            dispatch_submit(st->disp, r);
         if (st->shm && status_lock(st->shm) != -1) {
             st->shm->data.total_requests++;
             relief_shm_end_write(st->shm);
         }
         return 0;
+    }
     case MSG_SHUTDOWN:
         EV_INFO("shutdown_request", "from_pid=%d", m->camp_pid);
         return 1;
@@ -214,14 +226,21 @@ static void usage(const char *prog)
 {
     fprintf(stderr,
             "usage: %s [--camps FILE] [--scenario FILE] [--seed N] [--time-scale MS] [--exit-when-done]\n"
+            "          [--policy NAME] [--teams N] [--quantum Q] [--age MIN] [--preemptive on|off]\n"
             "          [--camp-bin PATH]\n"
             "  --camps     camps config, one \"<id> <name>\" per line (default %s)\n"
             "  --scenario  scenario CSV passed to every camp (default %s)\n"
             "  --seed      seed passed to every camp (default 1)\n"
             "  --time-scale  real ms per simulated minute for camps (default %d, 0 = no pacing)\n"
             "  --exit-when-done  camps send BYE and exit 0 after replaying the scenario\n"
+            "  --policy    live scheduling policy for RESCUE requests (default %s)\n"
+            "  --teams     rescue team threads, 1-%d (default %d)\n"
+            "  --quantum   RR quantum in simulated minutes (default %d)\n"
+            "  --age       MLFQ aging threshold in simulated minutes (default %d)\n"
+            "  --preemptive on|off  prio preemption (default off)\n"
             "  --camp-bin  camp executable (default: camp next to reliefd)\n",
-            prog, DEFAULT_CAMPS_CONF, DEFAULT_SCENARIO, DEFAULT_TIME_SCALE);
+            prog, DEFAULT_CAMPS_CONF, DEFAULT_SCENARIO, DEFAULT_TIME_SCALE, DEFAULT_POLICY,
+            RELIEF_SHM_TEAMS, DEFAULT_TEAMS, DEFAULT_QUANTUM, DEFAULT_AGE);
 }
 
 int main(int argc, char **argv)
@@ -232,6 +251,11 @@ int main(int argc, char **argv)
         { "seed",     required_argument, NULL, 'S' },
         { "time-scale", required_argument, NULL, 't' },
         { "exit-when-done", no_argument,   NULL, 'x' },
+        { "policy",   required_argument, NULL, 'p' },
+        { "teams",    required_argument, NULL, 'n' },
+        { "quantum",  required_argument, NULL, 'q' },
+        { "age",      required_argument, NULL, 'a' },
+        { "preemptive", required_argument, NULL, 'e' },
         { "camp-bin", required_argument, NULL, 'b' },
         { "help",     no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
@@ -242,7 +266,8 @@ int main(int argc, char **argv)
     const char *camp_bin = NULL;
     const char *home = getenv("RELIEF_HOME");
     char pidpath[CAMPS_PATH_MAX], logdir[CAMPS_PATH_MAX], logpath[CAMPS_PATH_MAX];
-    stats_t st = { { 0 }, NULL };
+    stats_t st = { { 0 }, NULL, NULL };
+    dispatch_config_t dcfg = { DEFAULT_POLICY, DEFAULT_TEAMS, DEFAULT_QUANTUM, -1, DEFAULT_AGE, 0, NULL };
     struct mq_attr attr;
     long other_pid = 0;
     mqd_t mq;
@@ -252,7 +277,7 @@ int main(int argc, char **argv)
     camps.seed = 1;
     camps.time_scale_ms = DEFAULT_TIME_SCALE;
 
-    while ((opt = getopt_long(argc, argv, "c:s:S:t:xb:h", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:s:S:t:xp:n:q:a:e:b:h", opts, NULL)) != -1) {
         char *end;
         switch (opt) {
         case 'c': camps_conf = optarg; break;
@@ -275,6 +300,32 @@ int main(int argc, char **argv)
             }
             break;
         case 'x': camps.exit_when_done = 1; break;
+        case 'p': dcfg.policy = optarg; break;
+        case 'n': case 'q': case 'a': {
+            unsigned long v, max = opt == 'n' ? RELIEF_SHM_TEAMS : 100000;
+            errno = 0;
+            v = strtoul(optarg, &end, 10);
+            if (errno || end == optarg || *end || v < 1 || v > max) {
+                fprintf(stderr, "invalid --%s (1-%lu): %s\n",
+                        opt == 'n' ? "teams" : opt == 'q' ? "quantum" : "age", max, optarg);
+                return 2;
+            }
+            if (opt == 'n')
+                dcfg.teams = (int)v;
+            else if (opt == 'q')
+                dcfg.quantum = (int)v;
+            else
+                dcfg.age = (int64_t)v;
+            break;
+        }
+        case 'e':
+            if (strcmp(optarg, "on") == 0 || strcmp(optarg, "off") == 0) {
+                dcfg.preemptive = strcmp(optarg, "on") == 0;
+            } else {
+                fprintf(stderr, "invalid --preemptive (on or off): %s\n", optarg);
+                return 2;
+            }
+            break;
         case 'h': usage(argv[0]); return 0;
         default:  usage(argv[0]); return 2;
         }
@@ -366,6 +417,20 @@ int main(int argc, char **argv)
     EV_INFO("daemon_start", "queue=%s shm=%s home=%s camps=%zu scenario=%s seed=%lu time_scale_ms=%lu",
             RELIEF_MQ_NAME, RELIEF_SHM_NAME, home, camps.n, camps.scenario, camps.seed,
             camps.time_scale_ms);
+
+    /* Rescue team threads. Started before the camps exist; fork() still happens only on
+     * this (main) thread, and the child calls nothing but async-signal-safe functions
+     * before execv, which is what makes forking a multithreaded process safe. */
+    dcfg.time_scale_ms = camps.time_scale_ms;
+    dcfg.shm = st.shm;
+    st.disp = dispatch_start(&dcfg);
+    if (!st.disp) {
+        unlink(pidpath);
+        relief_shm_destroy(st.shm);
+        mq_close(mq);
+        mq_unlink(RELIEF_MQ_NAME);
+        goto fail_log;
+    }
     camps_spawn_all(&camps);
     camps_publish_shm(&camps, st.shm);
     camps_save(&camps);
@@ -418,6 +483,10 @@ int main(int argc, char **argv)
     /* Camps may have queued BYE just before exiting: drain what is left. */
     while (receive_one(mq, 0, &camps, &st) == RECV_MSG)
         ;
+
+    /* Stop the rescue teams (unfinished requests are logged as abandoned) and join them. */
+    dispatch_stop(st.disp);
+    st.disp = NULL;
 
     for (size_t i = 0; i < camps.n; i++)
         EV_INFO("camp_final", "camp=%u name=%s state=%s restarts=%u", camps.camps[i].id,

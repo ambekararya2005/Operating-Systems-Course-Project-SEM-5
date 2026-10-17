@@ -88,6 +88,9 @@ struct sched_policy {
     void (*on_finish)(sched_policy_t *p, sched_job_t *job, int64_t now);
     /* Free state. */
     void (*destroy)(sched_policy_t *p);
+    /* Optional: ready-queue length per level, highest priority first (MLFQ: Q0..Q2, prio: one
+     * per severity). Fills out[0..max) and returns the number of levels; NULL means one queue. */
+    int  (*queue_lengths)(sched_policy_t *p, uint64_t *out, int max);
 };
 
 /* Create a policy by name ("fcfs", ...) and initialise it. NULL if unknown or init failed. */

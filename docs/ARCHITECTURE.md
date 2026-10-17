@@ -195,14 +195,48 @@ request's `service_time`). Both `schedsim` (offline experiments) and, later, rel
   rescues are demoted for using their 8-minute quantum. Under sustained overload, aging erodes the
   priority it was meant to protect. Experiments E1/E2 should quantify this (age, quanta, team count).
 
+## Phase 2: live scheduling in reliefd (`src/reliefd/dispatch.c`)
+Thread model of reliefd:
+
+| Thread | Job | Blocks in |
+|--------|-----|-----------|
+| main | mq receive loop, SIGCHLD reaping, fork/exec of camps; hands RESCUE requests to the dispatcher | `mq_timedreceive` |
+| team 1..N (`--teams`) | take a job (`pick_next`), work it one simulated minute at a time, act on preemption | `pthread_cond_wait` (idle), `nanosleep` (working) |
+| clock | once per simulated minute: the policy's `on_tick` (aging, preemption marks) | `clock_nanosleep` (absolute) |
+
+- **One mutex** (`d->lock`) guards the policy and its ready queues, the `running[]`/`preempt[]` arrays,
+  every job field and the counters. Teams sleep *outside* it and update their job inside it. Idle
+  teams wait on one **condition variable**, signalled on enqueue and broadcast on preemption or stop.
+  The wait re-checks its condition in a loop, which handles spurious wakeups and the case where
+  another team took the job first.
+- **Preemption** is decided by the policy in `on_tick` on the clock thread, which marks `preempt[t]`.
+  Team t acts at its next minute boundary: it puts the job back with its remaining time and picks
+  again. Each `event=preempt` has a `reason`: `priority` (something more important), `quantum` (RR
+  rotation) or `demote` (MLFQ level change; the same job often resumes at once if nothing better waits).
+- **Lock order** is always the dispatcher mutex, then the shared-memory status lock (to publish
+  `reliefctl sched` data), never the reverse. The main thread takes the status lock without the
+  dispatcher mutex. There is no cycle, so no deadlock.
+- **Signals and fork:** worker threads are created with every signal blocked, so SIGCHLD and SIGTERM
+  still reach the main thread, whose `mq_timedreceive` relies on EINTR. Camps are forked only by the
+  main thread (`PR_SET_PDEATHSIG` follows the forking thread), and the child calls only
+  async-signal-safe functions before `execv`. That is the rule for `fork()` in a multithreaded process.
+- **Time:** times are in simulated minutes (`--time-scale` ms each; 0 is treated as 1 ms). Wait,
+  turnaround and response are measured in milliseconds and logged in minutes. Live runs are not
+  bit-for-bit reproducible because thread timing varies; `schedsim` is the deterministic counterpart.
+- **Verified:** `tests/dispatch.sh` forces each behaviour with small scenarios: FCFS dispatches in
+  arrival order, CRITICAL preempts ROUTINE under `prio --preemptive on`, MLFQ aging promotes a
+  starving job, and stopping abandons queued work cleanly. It fails on any ThreadSanitizer report.
+
 ## Structured log (`$RELIEF_HOME/logs/reliefd.log`)
 One event per line: `ts=<iso8601> level=<lvl> comp=reliefd pid=<pid> event=<name> key=value ...`.
 Values contain no spaces, except `msg="..."` on free-form `event=log` lines. Events include
 `daemon_start`, `camp_spawn`, `camp_running`, `camp_exit`, `camp_signaled`, `camp_restart`,
-`camp_crashed`, `camp_killed`, `camp_final`, `hello`, `request`, `bye`, `shutdown` and `daemon_stop`.
+`camp_crashed`, `camp_killed`, `camp_final`, `hello`, `request` (with `sched=1` for RESCUE), `bye`, `shutdown`,
+`daemon_stop`, and from the scheduler `sched_start`, `dispatch`, `preempt` (`reason=`), `complete` (`wait=`,
+`turnaround=`, `response=` in simulated minutes), `promote`, `demote` and `sched_stop`.
 
 ## TODO
 - [x] Component diagram (Phase 1 process model above)
 - [ ] Request lifecycle (camp → scheduler → allocator → router → journal)
-- [ ] Thread model inside reliefd
+- [x] Thread model inside reliefd (Phase 2 live scheduling section)
 - [x] Policy plug-in interfaces (function-pointer tables): `sched_policy_t`, Phase 2 section above

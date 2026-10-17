@@ -104,11 +104,12 @@ static void mlfq_on_tick(sched_policy_t *p, int64_t now, sched_job_t *const *run
     mlfq_state_t *s = p->state;
     size_t n = 0;
 
-    /* 1. Demotion: a full quantum used in Q0/Q1 sends the job one level down. */
+    /* 1. Demotion: a full quantum used in Q0/Q1 sends the job one level down. A team already
+     * marked (live dispatcher: the team has not acted on it yet) is not demoted twice. */
     for (int t = 0; t < teams; t++) {
         sched_job_t *j = running[t];
         int l;
-        if (!j)
+        if (!j || preempt[t])
             continue;
         l = j->queue_level;
         if (l < MLFQ_LEVELS - 1 && j->slice >= g_quantum[l]) {
@@ -126,6 +127,15 @@ static void mlfq_on_tick(sched_policy_t *p, int64_t now, sched_job_t *const *run
     for (int l = 0; l < MLFQ_LEVELS && n < s->max_keys; l++)
         n += sched_fifo_keys(&s->q[l], level_key, s->keys + n, s->max_keys - n);
     sched_preempt_worst(s->keys, n, running, teams, level_key, preempt);
+}
+
+static int mlfq_queue_lengths(sched_policy_t *p, uint64_t *out, int max)
+{
+    mlfq_state_t *s = p->state;
+    int n = max < MLFQ_LEVELS ? max : MLFQ_LEVELS;
+    for (int l = 0; l < n; l++)
+        out[l] = s->q[l].len;
+    return n;
 }
 
 static void mlfq_destroy(sched_policy_t *p)
@@ -150,5 +160,6 @@ sched_policy_t *sched_mlfq_new(void)
     p->pick_next = mlfq_pick_next;
     p->on_tick = mlfq_on_tick;
     p->destroy = mlfq_destroy;
+    p->queue_lengths = mlfq_queue_lengths;
     return p;
 }

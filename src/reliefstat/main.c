@@ -3,8 +3,10 @@
  *             lock-free consistent reads with a seqlock — Unit 3
  *
  * reliefstat: print reliefd's live status table.
- *   reliefstat          human-readable table
- *   reliefstat --json   one JSON object (for scripts and later UIs)
+ *   reliefstat          human-readable tables: camps, then the live scheduler
+ *   reliefstat --sched  only the scheduler: policy, ready queue per level, each team's work
+ *   reliefstat --json   one JSON object (for scripts and later UIs); with --sched, only the
+ *                       scheduler object
  *
  * The segment is mapped PROT_READ: reliefstat can never corrupt it, and it does not take
  * the writers' mutex (locking would write to the mutex). relief_shm_snapshot() copies
@@ -44,6 +46,45 @@ static void print_json_string(const char *s)
     putchar('"');
 }
 
+/* Name of ready-queue level l for this policy. */
+static const char *level_name(const relief_status_t *st, unsigned l, char *buf, size_t len)
+{
+    if (strncmp(st->policy, "prio", 4) == 0)
+        return relief_severity_name(l);
+    if (st->nlevels > 1)
+        snprintf(buf, len, "Q%u", l);
+    else
+        snprintf(buf, len, "ready");
+    return buf;
+}
+
+static void print_sched_json(const relief_status_t *st, int64_t now)
+{
+    printf("{\"policy\":");
+    print_json_string(st->policy);
+    printf(",\"teams\":%u,\"enqueued\":%llu,\"completed\":%llu,\"preemptions\":%llu,"
+           "\"promotions\":%llu,\"queue\":[",
+           st->nteams, (unsigned long long)st->sched_enqueued,
+           (unsigned long long)st->sched_completed, (unsigned long long)st->sched_preemptions,
+           (unsigned long long)st->sched_promotions);
+    for (uint32_t l = 0; l < st->nlevels && l < RELIEF_SHM_LEVELS; l++) {
+        char buf[16];
+        printf("%s{\"level\":\"%s\",\"ready\":%llu}", l ? "," : "", level_name(st, l, buf, sizeof buf),
+               (unsigned long long)st->queue_len[l]);
+    }
+    printf("],\"team_list\":[");
+    for (uint32_t t = 0; t < st->nteams && t < RELIEF_SHM_TEAMS; t++) {
+        const relief_shm_team_t *tm = &st->teams[t];
+        printf("%s{\"team\":%u,\"busy\":%s,\"request\":%u,\"camp\":%u,\"severity\":\"%s\","
+               "\"level\":%u,\"remaining\":%lld,\"busy_ms\":%lld,\"completed\":%llu}",
+               t ? "," : "", t + 1, tm->state ? "true" : "false", tm->job_id, tm->camp,
+               tm->state ? relief_severity_name(tm->severity) : "", tm->level,
+               (long long)tm->remaining, tm->state ? (long long)(now - tm->busy_since_ms) : 0LL,
+               (unsigned long long)tm->completed);
+    }
+    printf("]}");
+}
+
 static void print_json(const relief_status_t *st, int running, int64_t now)
 {
     printf("{\"running\":%s,\"daemon_pid\":%d,\"start_time_ms\":%lld,\"uptime_ms\":%lld,"
@@ -61,7 +102,36 @@ static void print_json(const relief_status_t *st, int running, int64_t now)
                (long long)c->heartbeat_ms,
                c->heartbeat_ms ? (long long)(now - c->heartbeat_ms) : -1LL, c->restarts);
     }
-    printf("]}\n");
+    printf("],\"scheduler\":");
+    print_sched_json(st, now);
+    printf("}\n");
+}
+
+static void print_sched_table(const relief_status_t *st, int64_t now)
+{
+    printf("scheduler: policy %s, %u team%s; RESCUE requests enqueued %llu, completed %llu, "
+           "preemptions %llu, promotions %llu\n",
+           st->policy[0] ? st->policy : "-", st->nteams, st->nteams == 1 ? "" : "s",
+           (unsigned long long)st->sched_enqueued, (unsigned long long)st->sched_completed,
+           (unsigned long long)st->sched_preemptions, (unsigned long long)st->sched_promotions);
+    printf("  ready queue:");
+    for (uint32_t l = 0; l < st->nlevels && l < RELIEF_SHM_LEVELS; l++) {
+        char buf[16];
+        printf(" %s=%llu", level_name(st, l, buf, sizeof buf), (unsigned long long)st->queue_len[l]);
+    }
+    printf("\n  %4s  %-5s %9s %5s  %-9s %5s %5s %9s %5s\n", "TEAM", "STATE", "REQUEST", "CAMP",
+           "SEVERITY", "LEVEL", "LEFT", "BUSY FOR", "DONE");
+    for (uint32_t t = 0; t < st->nteams && t < RELIEF_SHM_TEAMS; t++) {
+        const relief_shm_team_t *tm = &st->teams[t];
+        if (!tm->state) {
+            printf("  %4u  %-5s %9s %5s  %-9s %5s %5s %9s %5llu\n", t + 1, "idle", "-", "-", "-", "-",
+                   "-", "-", (unsigned long long)tm->completed);
+            continue;
+        }
+        printf("  %4u  %-5s %9u %5u  %-9s %5u %5lld %8.1fs %5llu\n", t + 1, "busy", tm->job_id,
+               tm->camp, relief_severity_name(tm->severity), tm->level, (long long)tm->remaining,
+               (double)(now - tm->busy_since_ms) / 1000.0, (unsigned long long)tm->completed);
+    }
 }
 
 static void format_duration(char *buf, size_t len, int64_t ms)
@@ -98,8 +168,9 @@ static void print_table(const relief_status_t *st, int running, int64_t now)
 
 static void usage(const char *prog)
 {
-    fprintf(stderr, "usage: %s [--json]\n"
-                    "Print reliefd's live status table (POSIX shared memory %s).\n",
+    fprintf(stderr, "usage: %s [--sched] [--json]\n"
+                    "Print reliefd's live status table (POSIX shared memory %s).\n"
+                    "  --sched  only the live scheduler: policy, ready queue, teams\n",
             prog, RELIEF_SHM_NAME);
 }
 
@@ -107,17 +178,19 @@ int main(int argc, char **argv)
 {
     static const struct option opts[] = {
         { "json", no_argument, NULL, 'j' },
+        { "sched", no_argument, NULL, 's' },
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
     relief_status_t st;
     const relief_shm_t *shm;
-    int json = 0, opt, running;
+    int json = 0, sched_only = 0, opt, running;
     int64_t now;
 
-    while ((opt = getopt_long(argc, argv, "jh", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "jsh", opts, NULL)) != -1) {
         switch (opt) {
         case 'j': json = 1; break;
+        case 's': sched_only = 1; break;
         case 'h': usage(argv[0]); return 0;
         default:  usage(argv[0]); return 2;
         }
@@ -146,9 +219,17 @@ int main(int argc, char **argv)
 
     now = relief_now_ms();
     running = pid_alive((pid_t)st.daemon_pid);
-    if (json)
+    if (sched_only && json) {
+        print_sched_json(&st, now);
+        printf("\n");
+    } else if (sched_only) {
+        print_sched_table(&st, now);
+    } else if (json) {
         print_json(&st, running, now);
-    else
+    } else {
         print_table(&st, running, now);
+        printf("\n");
+        print_sched_table(&st, now);
+    }
     return running ? 0 : 1;
 }

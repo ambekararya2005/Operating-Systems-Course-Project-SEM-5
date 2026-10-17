@@ -10,6 +10,8 @@
 #   RELIEF_CAMPS       camps config  (default: <repo>/scenarios/camps.conf)
 #   RELIEF_SCENARIO    scenario CSV  (default: <repo>/scenarios/flood_pune.csv)
 #   RELIEF_TIME_SCALE  real ms per simulated minute (default: 100; 0 = no pacing)
+#   RELIEF_POLICY      live scheduling policy for RESCUE requests (default: fcfs)
+#   RELIEF_TEAMS       rescue team threads (default: 3)
 #
 # Exit status: 0 success, 1 runtime error (e.g. reliefd not running), 2 usage error.
 set -euo pipefail
@@ -24,6 +26,8 @@ read -r -a WRAP <<< "${RELIEF_WRAP:-}"
 CAMPS=${RELIEF_CAMPS:-$ROOT/scenarios/camps.conf}
 SCENARIO=${RELIEF_SCENARIO:-$ROOT/scenarios/flood_pune.csv}
 TIME_SCALE=${RELIEF_TIME_SCALE:-100}
+POLICY=${RELIEF_POLICY:-fcfs}
+TEAMS=${RELIEF_TEAMS:-3}
 PIDFILE="$RELIEF_HOME/reliefd.pid"
 CAMPS_PIDS="$RELIEF_HOME/camps.pids"    # camp table published by reliefd: "<id> <pid> <state> <name>"
 LOGDIR="$RELIEF_HOME/logs"
@@ -39,15 +43,17 @@ commands:
   start                 start reliefd and its camps in the background
   stop                  stop reliefd (SIGTERM); it stops and reaps all camps
   status [--json]       reliefd state plus the live camp table from shared memory (reliefstat)
+  sched [--json]        live scheduler: policy, ready queue per level, what each team works on
   ps                    per-process PCB fields from /proc for reliefd and every camp
   tree                  process tree rooted at reliefd
   alert <camp-id|all>   evacuation alert (SIGUSR1): the camp's next 5 requests become CRITICAL
   dump  <camp-id|all>   status dump (SIGUSR2): print the camp's counters
   report [--since MIN | --last-run]
-                        requests per camp, severity and resource from the structured log
-  simulate flood [--camps N] [--seed S] [--rows R] [--time-scale MS]
-                        generate a scenario, run it to completion (every camp sends BYE),
-                        stop reliefd and print the report
+                        requests per camp, severity and resource, and the scheduler's
+                        per-severity waits, from the structured log
+  simulate flood [--camps N] [--seed S] [--rows R] [--time-scale MS] [--policy P] [--teams T]
+                        generate a scenario, run it to completion (every camp sends BYE and
+                        every RESCUE request is served), stop reliefd and print the report
   help                  this message
 
 logs: \$RELIEF_HOME/logs/reliefd.log (key=value), reliefd.out (raw stderr)
@@ -126,7 +132,7 @@ start_daemon() {
     rm -f "$PIDFILE"
     mkdir -p "$LOGDIR"
     nohup "${WRAP[@]}" "$BIN_DIR/reliefd" --camps "$CAMPS" --scenario "$SCENARIO" \
-        --time-scale "$TIME_SCALE" "$@" \
+        --time-scale "$TIME_SCALE" --policy "$POLICY" --teams "$TEAMS" "$@" \
         >>"$OUTFILE" 2>&1 </dev/null &
     for _ in $(seq 50); do
         if pid=$(daemon_pid); then
@@ -188,6 +194,28 @@ cmd_status() {
         fi
     else
         echo "stopped  home=$RELIEF_HOME"
+    fi
+}
+
+cmd_sched() {
+    local opt json=0 stat="$BIN_DIR/reliefstat"
+    long_to_short "json=j" "$@"
+    set -- "${ARGS[@]+"${ARGS[@]}"}"
+    local OPTIND=1
+    while getopts ":j" opt; do
+        case "$opt" in
+            j) json=1 ;;
+            *) usage_err "sched: unknown option -$OPTARG" ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+    (( $# == 0 )) || usage_err "sched: unexpected argument '$1'"
+    require_daemon >/dev/null
+    [[ -x "$stat" ]] || die "reliefstat not built; run 'make' first"
+    if (( json )); then
+        "${WRAP[@]}" "$stat" --sched --json
+    else
+        "${WRAP[@]}" "$stat" --sched
     fi
 }
 
@@ -348,6 +376,25 @@ cmd_report() {
         }
         NR < first { next }
         / event=camp_spawn / { parse(); name[f["camp"]] = f["name"]; next }
+        / event=sched_start / { parse(); policy = f["policy"]; teams = f["teams"]; next }
+        / event=preempt / {
+            if (cutoff != "" && substr($1, 4, 19) < cutoff) next
+            parse(); preempts++; preason[f["reason"]]++; next
+        }
+        / event=promote / {
+            if (cutoff != "" && substr($1, 4, 19) < cutoff) next
+            promotes++; next
+        }
+        / event=sched_stop / { parse(); abandoned += f["abandoned"]; next }
+        / event=complete / {
+            if (cutoff != "" && substr($1, 4, 19) < cutoff) next
+            parse()
+            s = f["severity"]
+            done++; dn[s]++; dw[s] += f["wait"]; dt[s] += f["turnaround"]; dr[s] += f["response"]
+            if (f["wait"] + 0 > dmax[s] + 0) dmax[s] = f["wait"]
+            allw += f["wait"]; allt += f["turnaround"]
+            next
+        }
         / event=request / {
             if (cutoff != "" && substr($1, 4, 19) < cutoff) next
             parse()
@@ -382,6 +429,26 @@ cmd_report() {
                 printf "  %-12s %6d %6.1f%%\n", rorder[i], res[rorder[i]], 100 * res[rorder[i]] / total
             printf "\nBusiest camp: %d %s (%d requests, %.1f%%)\n", busiest,
                    (busiest in name) ? name[busiest] : "?", best, 100 * best / total
+
+            printf "\nScheduler (RESCUE requests; times in simulated minutes)\n"
+            if (done == 0) { print "  no completed RESCUE requests in this window"; exit 0 }
+            printf "  policy %s, %s teams: completed %d, average wait %.1f, average turnaround %.1f\n",
+                   policy == "" ? "?" : policy, teams == "" ? "?" : teams, done, allw / done, allt / done
+            printf "  preemptions %d", preempts + 0
+            if (preempts) {
+                printf " ("; sep = ""
+                for (r in preason) { printf "%s%s %d", sep, r, preason[r]; sep = ", " }
+                printf ")"
+            }
+            printf ", promotions %d, abandoned at stop %d\n", promotes + 0, abandoned + 0
+            printf "  %-10s %5s %9s %15s %13s %9s\n", "SEVERITY", "DONE", "AVG WAIT", "AVG TURNAROUND",
+                   "AVG RESPONSE", "MAX WAIT"
+            for (i = 1; i <= 3; i++) {
+                s = order[i]
+                if (dn[s] == 0) { printf "  %-10s %5d %9s %15s %13s %9s\n", s, 0, "-", "-", "-", "-"; continue }
+                printf "  %-10s %5d %9.1f %15.1f %13.1f %9.1f\n", s, dn[s], dw[s] / dn[s], dt[s] / dn[s],
+                       dr[s] / dn[s], dmax[s]
+            }
         }' "$EVENTLOG"
 }
 
@@ -395,31 +462,36 @@ make_camps_conf() {
 }
 
 cmd_simulate() {
-    local opt kind camps=8 seed=2019 rows=200 scale=10 dir conf csv start_line byes=0 dpid timeout_s v
-    [[ $# -ge 1 ]] || usage_err "usage: $PROG simulate flood [--camps N] [--seed S] [--rows R] [--time-scale MS]"
+    local opt kind camps=8 seed=2019 rows=200 scale=10 policy=$POLICY teams=$TEAMS
+    local dir conf csv start_line byes=0 dpid timeout_s v sched=0 served=0
+    [[ $# -ge 1 ]] || usage_err "usage: $PROG simulate flood [--camps N] [--seed S] [--rows R] [--time-scale MS] [--policy P] [--teams T]"
     kind=$1
     shift
     [[ "$kind" == flood ]] || usage_err "simulate: unknown scenario '$kind' (supported: flood)"
-    long_to_short "camps=c seed=s rows=r time-scale=t" "$@"
+    long_to_short "camps=c seed=s rows=r time-scale=t policy=p teams=n" "$@"
     set -- "${ARGS[@]+"${ARGS[@]}"}"
     local OPTIND=1
-    while getopts ":c:s:r:t:" opt; do
+    while getopts ":c:s:r:t:p:n:" opt; do
         case "$opt" in
             c) camps=$OPTARG ;;
             s) seed=$OPTARG ;;
             r) rows=$OPTARG ;;
             t) scale=$OPTARG ;;
+            p) policy=$OPTARG ;;
+            n) teams=$OPTARG ;;
             :) usage_err "simulate: -$OPTARG needs a value" ;;
             *) usage_err "simulate: unknown option -$OPTARG" ;;
         esac
     done
     shift $((OPTIND - 1))
     (( $# == 0 )) || usage_err "simulate: unexpected argument '$1'"
-    for v in "$camps" "$seed" "$rows" "$scale"; do
+    for v in "$camps" "$seed" "$rows" "$scale" "$teams"; do
         is_uint "$v" || usage_err "simulate: options need non-negative integers, got '$v'"
     done
     (( camps >= 1 && camps <= 64 )) || usage_err "simulate: --camps must be 1-64"
     (( rows >= camps )) || usage_err "simulate: --rows must be at least --camps"
+    (( teams >= 1 && teams <= 16 )) || usage_err "simulate: --teams must be 1-16"
+    [[ "$policy" =~ ^(fcfs|sjf|srtf|rr|prio|mlfq)$ ]] || usage_err "simulate: unknown policy '$policy'"
     if dpid=$(daemon_pid); then
         die "reliefd already running (pid $dpid); stop it before simulating"
     fi
@@ -432,11 +504,13 @@ cmd_simulate() {
     python3 -I "$ROOT/experiments/gen_scenario.py" --camps "$camps" --seed "$seed" --rows "$rows" -o "$csv" \
         || die "scenario generation failed"
     echo "scenario: $csv ($rows requests, $camps camps, seed $seed, $scale ms per simulated minute)"
+    echo "scheduler: policy $policy, $teams teams (RESCUE requests only)"
 
     mkdir -p "$LOGDIR"
     touch "$EVENTLOG"
     start_line=$(( $(wc -l < "$EVENTLOG") + 1 ))
-    CAMPS=$conf SCENARIO=$csv TIME_SCALE=$scale start_daemon --seed "$seed" --exit-when-done
+    CAMPS=$conf SCENARIO=$csv TIME_SCALE=$scale POLICY=$policy TEAMS=$teams \
+        start_daemon --seed "$seed" --exit-when-done
     dpid=$(daemon_pid) || die "reliefd did not start"
 
     # Wait until every camp has replayed its rows and sent BYE (camps run with --exit-when-done).
@@ -449,6 +523,17 @@ cmd_simulate() {
     done
     (( byes >= camps )) || { cmd_stop >/dev/null || true; die "timed out: $byes of $camps camps sent BYE"; }
     echo "all $camps camps sent BYE"
+
+    # Then wait until the rescue teams have served every scheduled request.
+    for _ in $(seq $((timeout_s * 10))); do
+        sched=$(tail -n +"$start_line" "$EVENTLOG" | grep -c ' event=request .* sched=1' || true)
+        served=$(tail -n +"$start_line" "$EVENTLOG" | grep -c ' event=complete ' || true)
+        (( served >= sched )) && break
+        kill -0 "$dpid" 2>/dev/null || die "reliefd exited during the simulation; see $OUTFILE"
+        sleep 0.1
+    done
+    (( served >= sched )) || { cmd_stop >/dev/null || true; die "timed out: $served of $sched RESCUE requests served"; }
+    echo "all $sched RESCUE requests served by the teams"
     cmd_stop
     echo
     cmd_report --last-run
@@ -462,6 +547,7 @@ main() {
         start)          cmd_start "$@" ;;
         stop)           cmd_stop "$@" ;;
         status)         cmd_status "$@" ;;
+        sched)          cmd_sched "$@" ;;
         ps)             cmd_ps "$@" ;;
         tree)           cmd_tree "$@" ;;
         alert)          cmd_alert "$@" ;;

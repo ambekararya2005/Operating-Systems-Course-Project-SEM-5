@@ -82,6 +82,19 @@ static void prio_on_tick(sched_policy_t *p, int64_t now, sched_job_t *const *run
     sched_preempt_worst(s->keys, n, running, teams, severity_key, preempt);
 }
 
+/* One "level" per severity: CRITICAL, URGENT, ROUTINE. */
+static int prio_queue_lengths(sched_policy_t *p, uint64_t *out, int max)
+{
+    prio_state_t *s = p->state;
+    int n = max < 3 ? max : 3;
+    for (int l = 0; l < n; l++)
+        out[l] = 0;
+    for (const sched_job_t *j = s->ready.head; j; j = j->next)
+        if (j->severity < n)
+            out[j->severity]++;
+    return n;
+}
+
 static void prio_destroy(sched_policy_t *p)
 {
     prio_state_t *s = p->state;
@@ -104,5 +117,6 @@ sched_policy_t *sched_prio_new(void)
     p->pick_next = prio_pick_next;
     p->on_tick = prio_on_tick;
     p->destroy = prio_destroy;
+    p->queue_lengths = prio_queue_lengths;
     return p;
 }

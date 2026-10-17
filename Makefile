@@ -2,6 +2,7 @@
 #   make            build reliefd, camp, reliefstat, schedsim (+ test helpers)
 #   make test       tests/{smoke,camps,traffic,signals,status,cli}.sh + phase1_smoke.sh (gate M1)
 #                   + tests/sched.sh (build/test_sched unit tests, schedsim)
+#                   + tests/dispatch.sh (reliefd rescue-team threads, live scheduling)
 #   make tsan       ThreadSanitizer build in build/tsan/ + tests
 #   make valgrind   tests with reliefd and camps under valgrind
 #   make run        run reliefd in the foreground (RELIEF_HOME=./run)
@@ -18,7 +19,10 @@ LDLIBS   := -lrt -lm
 
 OBJ        := $(BUILD)/obj
 COMMON_SRC := src/common/log.c src/common/shm.c
-RELIEFD_SRC := src/reliefd/main.c src/reliefd/camps.c $(COMMON_SRC)
+SCHED_POLICY_SRC := src/sched/sched.c src/sched/fcfs.c src/sched/sjf.c src/sched/srtf.c \
+                    src/sched/rr.c src/sched/prio.c src/sched/mlfq.c
+RELIEFD_SRC := src/reliefd/main.c src/reliefd/camps.c src/reliefd/dispatch.c $(COMMON_SRC) \
+               $(SCHED_POLICY_SRC)
 CAMP_SRC    := src/camp/main.c $(COMMON_SRC)
 RELIEFSTAT_SRC := src/reliefstat/main.c src/common/shm.c
 
@@ -26,8 +30,7 @@ RELIEFD_OBJ := $(RELIEFD_SRC:%.c=$(OBJ)/%.o)
 CAMP_OBJ    := $(CAMP_SRC:%.c=$(OBJ)/%.o)
 RELIEFSTAT_OBJ := $(RELIEFSTAT_SRC:%.c=$(OBJ)/%.o)
 # Scheduler library (independent of IPC): policies + discrete-time simulator.
-SCHED_SRC    := src/sched/sched.c src/sched/sim.c src/sched/fcfs.c src/sched/sjf.c \
-                src/sched/srtf.c src/sched/rr.c src/sched/prio.c src/sched/mlfq.c
+SCHED_SRC    := src/sched/sim.c $(SCHED_POLICY_SRC)
 SCHEDSIM_SRC := src/sched/schedsim.c $(SCHED_SRC)
 SCHEDSIM_OBJ := $(SCHEDSIM_SRC:%.c=$(OBJ)/%.o)
 TEST_SCHED_SRC := tests/test_sched.c $(SCHED_SRC)
@@ -37,7 +40,7 @@ SHM_DIE_SRC := tests/helpers/shm_die_locked.c src/common/shm.c
 SHM_DIE_OBJ := $(SHM_DIE_SRC:%.c=$(OBJ)/%.o)
 
 TESTS := tests/smoke.sh tests/camps.sh tests/traffic.sh tests/signals.sh tests/status.sh tests/cli.sh \
-         tests/phase1_smoke.sh tests/sched.sh
+         tests/phase1_smoke.sh tests/sched.sh tests/dispatch.sh
 
 # --trace-children: camps exec'd by reliefd also run under valgrind.
 VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
