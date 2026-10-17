@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ReliefOS Dashboard</title>
+<!--
+  OS concept: a live view of the ReliefOS status table (shared memory, via reliefstat) and of
+  reliefd's event log (Server-Sent Events) — Units 2/3. One file, no CDN, works offline.
+  Colours: the validated reference palette. Categorical slots 1-3 (blue, orange, aqua) for
+  routine event types; the fixed status palette (good / warning / serious / critical) for
+  heartbeat health, safe/unsafe and problem events, always with a text label beside the colour.
+-->
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f3f0;
+  --surface: #fcfcfb;
+  --surface-2: #f0efec;
+  --border: #e2e1dc;
+  --text: #0b0b0b;
+  --text-2: #52514e;
+  --text-3: #75746e;
+  --s1: #2a78d6;          /* categorical slot 1, blue */
+  --s2: #eb6834;          /* slot 2, orange */
+  --s3: #1baf7a;          /* slot 3, aqua */
+  --seq-fill: #2a78d6;    /* sequential blue (magnitude) */
+  --seq-track: #cde2fb;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --grid: #e8e7e3;
+  --focus: #2a78d6;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121211; --surface: #1a1a19; --surface-2: #232321; --border: #33332f;
+    --text: #f0efec; --text-2: #c3c2b7; --text-3: #9b9a90;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+    --seq-fill: #3987e5; --seq-track: #1c3556;
+    --grid: #2b2b28; --focus: #6da7ec;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211; --surface: #1a1a19; --surface-2: #232321; --border: #33332f;
+  --text: #f0efec; --text-2: #c3c2b7; --text-3: #9b9a90;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+  --seq-fill: #3987e5; --seq-track: #1c3556;
+  --grid: #2b2b28; --focus: #6da7ec;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+}
+button, select { font: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+header {
+  position: sticky; top: 0; z-index: 5; background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center;
+}
+header h1 { font-size: 17px; margin: 0; letter-spacing: .2px; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--text-2); font-size: 13px; }
+.meta b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 99px;
+  background: var(--surface-2); border: 1px solid var(--border); font-size: 12px; font-weight: 600; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.spacer { flex: 1; }
+.tabs { display: flex; gap: 4px; }
+.tabs button, .btn {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  padding: 6px 12px; border-radius: 8px; cursor: pointer;
+}
+.tabs button[aria-selected="true"] { background: var(--text); color: var(--surface); border-color: var(--text); }
+.btn:hover:not(:disabled), .tabs button:hover { filter: brightness(0.96); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.primary { background: var(--s1); border-color: var(--s1); color: #fff; }
+main { padding: 16px; max-width: 1400px; margin: 0 auto; }
+.grid { display: grid; gap: 14px; grid-template-columns: repeat(12, 1fr); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; min-width: 0; }
+.card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--text-2); margin: 0 0 10px; font-weight: 600; }
+.span-12 { grid-column: span 12; } .span-8 { grid-column: span 8; } .span-6 { grid-column: span 6; } .span-4 { grid-column: span 4; }
+@media (max-width: 1000px) { .span-8, .span-6, .span-4 { grid-column: span 12; } }
+.banner { padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface-2);
+  margin-bottom: 14px; display: none; align-items: center; gap: 10px; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.controls label { color: var(--text-2); font-size: 13px; }
+.controls select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); }
+#msg { margin-top: 10px; font-size: 13px; color: var(--text-2); white-space: pre-wrap; max-height: 9em; overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.camps { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.camp { border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--surface-2); }
+.camp .top { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.camp .name { font-weight: 600; }
+.camp .id { color: var(--text-3); font-size: 12px; }
+.camp dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 8px 0 0; font-size: 12.5px; }
+.camp dt { color: var(--text-2); } .camp dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.badge { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--border); }
+.hb { display: inline-flex; align-items: center; gap: 5px; justify-content: flex-end; }
+.chart-wrap { position: relative; }
+.chart-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.chart-head .now { font-variant-numeric: tabular-nums; color: var(--text-2); font-size: 13px; }
+.chart-head .now b { color: var(--text); font-size: 16px; }
+canvas { width: 100%; height: 150px; display: block; }
+.tip { position: absolute; pointer-events: none; background: var(--text); color: var(--surface); font-size: 12px;
+  padding: 4px 8px; border-radius: 6px; white-space: nowrap; transform: translate(-50%, -110%); display: none; }
+.res-row { display: grid; grid-template-columns: 76px 1fr 92px; gap: 10px; align-items: center; margin: 7px 0; font-size: 13px; }
+.bar { height: 12px; border-radius: 4px; background: var(--seq-track); overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--seq-fill); border-radius: 0 4px 4px 0; transition: width .4s; }
+.res-row .num { text-align: right; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.state-line { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; color: var(--text-2); }
+.slots { display: flex; gap: 6px; margin: 6px 0 10px; flex-wrap: wrap; }
+.slot { width: 34px; height: 34px; border-radius: 6px; border: 2px solid var(--border); background: transparent; transition: background .3s, border-color .3s; }
+.slot.full { background: var(--s1); border-color: var(--s1); }
+.small { font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.teams { margin-top: 8px; font-size: 12.5px; display: grid; gap: 3px; color: var(--text-2); }
+.feed { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow: auto; font-size: 12.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.feed li { display: grid; grid-template-columns: 90px 150px 1fr; gap: 8px; padding: 3px 4px; border-bottom: 1px solid var(--grid); }
+.feed .t { color: var(--text-3); }
+.feed .ev { display: inline-flex; align-items: center; gap: 6px; color: var(--text); font-weight: 600; overflow: hidden; }
+.feed .rest { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--text-2); margin-bottom: 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+#experiments section { margin-bottom: 26px; }
+#experiments h2 { font-size: 16px; margin: 0 0 10px; }
+.figs { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); }
+@media (max-width: 520px) { .figs { grid-template-columns: 1fr; } }
+figure { margin: 0; background: #fcfcfb; border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; }
+figure img { width: 100%; height: auto; display: block; }
+figcaption { color: #52514e; font-size: 13px; margin-top: 6px; }
+.empty { color: var(--text-3); font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ReliefOS</h1>
+  <span class="pill" id="runpill"><span class="dot" id="rundot"></span><span id="runtext">connecting…</span></span>
+  <div class="meta" id="meta" aria-live="polite"></div>
+  <span class="spacer"></span>
+  <div class="tabs" role="tablist">
+    <button role="tab" id="tab-live" aria-selected="true" aria-controls="live">Live</button>
+    <button role="tab" id="tab-exp" aria-selected="false" aria-controls="experiments">Experiments</button>
+  </div>
+  <button class="btn" id="theme" title="Switch light / dark theme">Theme</button>
+</header>
+
+<main>
+  <section id="live" role="tabpanel" aria-labelledby="tab-live">
+    <div class="banner" id="banner"><b>ReliefOS is not running.</b> Press <i>Start</i>, or run a flood simulation.</div>
+    <div class="grid">
+      <div class="card span-12">
+        <h2>Control</h2>
+        <div class="controls">
+          <button class="btn primary" id="b-start">Start</button>
+          <button class="btn" id="b-stop">Stop</button>
+          <span style="width:10px"></span>
+          <label for="campsel">Camp</label>
+          <select id="campsel"><option value="all">all</option></select>
+          <button class="btn" id="b-alert" title="SIGUSR1: the camp's next 5 requests are sent as CRITICAL">Evacuation alert</button>
+          <button class="btn" id="b-dump" title="SIGUSR2: the camp logs its counters">Status dump</button>
+          <span style="width:10px"></span>
+          <button class="btn" id="b-sim" title="reliefctl simulate flood: start, run until every camp is done, stop, report">Run flood simulation</button>
+        </div>
+        <div id="msg" role="status" aria-live="polite"></div>
+      </div>
+
+      <div class="card span-12">
+        <h2>Camps (processes)</h2>
+        <div class="camps" id="camps"><div class="empty">No camps.</div></div>
+      </div>
+
+      <div class="card span-6">
+        <div class="chart-head"><h2 style="margin:0">Requests per second, last 2 minutes</h2><span class="now" id="rps-now"></span></div>
+        <div class="chart-wrap"><canvas id="c-rps" aria-label="Requests per second over the last two minutes"></canvas><div class="tip" id="tip-rps"></div></div>
+      </div>
+      <div class="card span-6">
+        <div class="chart-head"><h2 style="margin:0">Ready-queue length, last 2 minutes</h2><span class="now" id="rq-now"></span></div>
+        <div class="chart-wrap"><canvas id="c-rq" aria-label="Rescue requests waiting in the ready queue over the last two minutes"></canvas><div class="tip" id="tip-rq"></div></div>
+        <div class="teams" id="teams"></div>
+      </div>
+
+      <div class="card span-6">
+        <h2>Banker's resources (Available of Total)</h2>
+        <div id="res"></div>
+        <div class="state-line" id="safe"></div>
+      </div>
+      <div class="card span-6">
+        <h2>Loading dock (bounded buffer)</h2>
+        <div class="slots" id="slots"></div>
+        <div class="small" id="dockinfo"></div>
+      </div>
+
+      <div class="card span-12">
+        <h2>Events (reliefd.log, live)</h2>
+        <div class="legend" id="legend"></div>
+        <ul class="feed" id="feed"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="experiments" role="tabpanel" aria-labelledby="tab-exp" hidden></section>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const WINDOW_S = 120;
+const history = [];               // {t, rps, ready}
+let lastTotal = null, lastT = null, status = null, jobTimer = null;
+
+/* ---------- theme ---------- */
+(function () {
+  let saved = null;
+  try { saved = localStorage.getItem("reliefos-theme"); } catch (e) { /* storage blocked */ }
+  if (saved) document.documentElement.dataset.theme = saved;
+  $("theme").addEventListener("click", () => {
+    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    const cur = document.documentElement.dataset.theme || (dark ? "dark" : "light");
+    const next = cur === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("reliefos-theme", next); } catch (e) { /* ignore */ }
+    drawCharts();
+  });
+})();
+
+/* ---------- tabs ---------- */
+function showTab(live) {
+  $("tab-live").setAttribute("aria-selected", live);
+  $("tab-exp").setAttribute("aria-selected", !live);
+  $("live").hidden = !live;
+  $("experiments").hidden = live;
+  if (!live) loadExperiments();
+  else drawCharts();
+}
+$("tab-live").onclick = () => showTab(true);
+$("tab-exp").onclick = () => showTab(false);
+
+/* ---------- helpers ---------- */
+function fmtUptime(ms) {
+  const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") e.className = v; else if (k === "style") e.style.cssText = v; else e.setAttribute(k, v);
+  }
+  for (const k of kids) e.append(k);
+  return e;
+}
+function dot(color) { const d = el("span", { class: "dot" }); d.style.background = color; return d; }
+
+/* ---------- status polling ---------- */
+async function poll() {
+  try {
+    const r = await fetch("/api/status", { cache: "no-store" });
+    status = await r.json();
+  } catch (e) {
+    status = { running: false, error: "dashboard server unreachable" };
+  }
+  const now = Date.now() / 1000;
+  if (status.running) {
+    let rps = 0;
+    if (lastTotal !== null && now > lastT && status.total_requests >= lastTotal)
+      rps = (status.total_requests - lastTotal) / (now - lastT);
+    lastTotal = status.total_requests; lastT = now;
+    const ready = (status.scheduler?.queue || []).reduce((a, q) => a + q.ready, 0);
+    history.push({ t: now, rps, ready });
+  } else {
+    lastTotal = null;
+  }
+  while (history.length && history[0].t < now - WINDOW_S) history.shift();
+  render();
+}
+
+function render() {
+  const s = status || {};
+  const running = !!s.running;
+  $("rundot").style.background = running ? css("--good") : css("--critical");
+  $("runtext").textContent = running ? `running · pid ${s.daemon_pid}` : (s.error ? s.error : "not running");
+  $("banner").style.display = running ? "none" : "flex";
+  $("b-start").disabled = running || s.job_running;
+  $("b-stop").disabled = !running || s.job_running;
+  $("b-alert").disabled = $("b-dump").disabled = !running;
+  $("b-sim").disabled = running || s.job_running;
+
+  const meta = $("meta");
+  meta.replaceChildren();
+  if (running) {
+    const last = history.length ? history[history.length - 1].rps : 0;
+    for (const [k, v] of [["policy", s.scheduler?.policy || "-"], ["deadlock", s.banker?.mode || "-"],
+                          ["uptime", fmtUptime(s.uptime_ms || 0)], ["requests", s.total_requests],
+                          ["req/s", last.toFixed(1)]]) {
+      meta.append(el("span", {}, `${k} `, el("b", {}, String(v))));
+    }
+  }
+  renderCamps(running ? s.camps || [] : []);
+  renderSched(running ? s.scheduler : null);
+  renderBanker(running ? s.banker : null);
+  renderDock(running ? s.dock : null);
+  drawCharts();
+}
+
+function renderCamps(camps) {
+  const box = $("camps");
+  const sel = $("campsel"), keep = sel.value;
+  if (!camps.length) { box.replaceChildren(el("div", { class: "empty" }, "No camps.")); }
+  else {
+    box.replaceChildren(...camps.map((c) => {
+      const live = c.state === "RUNNING" || c.state === "STARTING";
+      const age = c.heartbeat_age_ms;
+      let hbColor = css("--critical"), hbText = "stale";
+      if (!live || age < 0) { hbColor = css("--text-3"); hbText = "-"; }
+      else if (age < 2000) { hbColor = css("--good"); hbText = "ok"; }
+      else if (age < 5000) { hbColor = css("--warning"); hbText = "late"; }
+      const stateColor = c.state === "RUNNING" ? css("--good") : c.state === "CRASHED" ? css("--critical") : css("--warning");
+      const badge = el("span", { class: "badge" }, dot(stateColor), " ", c.state);
+      badge.style.display = "inline-flex"; badge.style.alignItems = "center";
+      const hb = el("span", { class: "hb" }, dot(hbColor), live && age >= 0 ? `${(age / 1000).toFixed(1)} s ${hbText}` : "-");
+      return el("div", { class: "camp" },
+        el("div", { class: "top" }, el("span", {}, el("span", { class: "name" }, c.name), " ", el("span", { class: "id" }, `#${c.id}`)), badge),
+        el("dl", {},
+          el("dt", {}, "pid / proc state"), el("dd", {}, `${c.pid} / ${c.proc_state || "-"}`),
+          el("dt", {}, "requests sent"), el("dd", {}, String(c.requests_sent)),
+          el("dt", {}, "restarts"), el("dd", {}, String(c.restarts)),
+          el("dt", {}, "heartbeat"), el("dd", {}, hb)));
+    }));
+  }
+  const ids = camps.map((c) => String(c.id));
+  if (sel.options.length - 1 !== ids.length || ids.some((id, i) => sel.options[i + 1].value !== id)) {
+    sel.replaceChildren(el("option", { value: "all" }, "all"), ...camps.map((c) => el("option", { value: String(c.id) }, `${c.id} ${c.name}`)));
+    sel.value = [...sel.options].some((o) => o.value === keep) ? keep : "all";
+  }
+}
+
+function renderSched(sc) {
+  const t = $("teams");
+  t.replaceChildren();
+  if (!sc) return;
+  const q = (sc.queue || []).map((x) => `${x.level} ${x.ready}`).join(" · ");
+  t.append(el("div", {}, `policy ${sc.policy}: ready ${q || "-"} · completed ${sc.completed} · preemptions ${sc.preemptions}`));
+  for (const tm of sc.team_list || [])
+    t.append(el("div", {}, `team ${tm.team}: ` + (tm.busy ? `request ${tm.request} (${tm.severity}, camp ${tm.camp}), ${tm.remaining} min left` : "idle")));
+}
+
+function renderBanker(b) {
+  const box = $("res"), safe = $("safe");
+  box.replaceChildren(); safe.replaceChildren();
+  if (!b) { box.append(el("div", { class: "empty" }, "-")); return; }
+  b.resources.forEach((name, j) => {
+    const total = b.total[j], avail = b.available[j];
+    const fill = el("i"); fill.style.width = total ? `${(100 * avail) / total}%` : "0%";
+    box.append(el("div", { class: "res-row" }, el("span", {}, name), el("div", { class: "bar", role: "img", "aria-label": `${name}: ${avail} of ${total} available` }, fill),
+      el("span", { class: "num" }, `${avail} of ${total}`)));
+  });
+  const ok = b.safe;
+  const tag = el("span", { class: "pill" }, dot(ok ? css("--good") : css("--critical")), ok ? "SAFE" : "UNSAFE");
+  safe.append(tag, el("span", {}, ok && b.safe_sequence.length ? `safe sequence <${b.safe_sequence.map((c) => "P" + c).join(", ")}>` : "no safe sequence"),
+    el("span", {}, `mode ${b.mode} · grants ${b.grants} · unsafe denials ${b.denied_unsafe} · waiting ${b.waiting}`));
+}
+
+function renderDock(d) {
+  const slots = $("slots"), info = $("dockinfo");
+  if (!d) { slots.replaceChildren(); info.textContent = "-"; return; }
+  const cap = Math.min(d.capacity || 0, 64);
+  if (slots.children.length !== cap) slots.replaceChildren(...Array.from({ length: cap }, () => el("div", { class: "slot" })));
+  [...slots.children].forEach((s, i) => s.classList.toggle("full", i < d.occupancy));
+  slots.setAttribute("aria-label", `${d.occupancy} of ${cap} slots full`);
+  info.textContent = `${d.occupancy} of ${cap} slots full (max ${d.max_occupancy}) · ${d.producers} producers, ${d.trucks} trucks · ` +
+    `produced ${d.produced}, delivered ${d.delivered} · producers blocked on a full dock ${d.blocked_puts}×`;
+}
+
+/* ---------- charts (hand-drawn on canvas; one measure per chart, one y-axis) ---------- */
+function niceMax(v) {
+  if (v <= 1) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(v))), m = v / p;
+  return (m <= 2 ? 2 : m <= 5 ? 5 : 10) * p;
+}
+const charts = {
+  rps: { canvas: "c-rps", tip: "tip-rps", key: "rps", color: "--s1", fmt: (v) => v.toFixed(1) + " req/s", now: "rps-now" },
+  rq:  { canvas: "c-rq",  tip: "tip-rq",  key: "ready", color: "--s2", fmt: (v) => v + " waiting", now: "rq-now" },
+};
+function drawChart(ch, hoverX) {
+  const cv = $(ch.canvas);
+  if (!cv.offsetParent) return;
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+  const L = 40, R = 10, T = 8, B = 22, pw = W - L - R, ph = H - T - B;
+  const now = Date.now() / 1000;
+  const pts = history.map((h) => ({ t: h.t, v: h[ch.key] }));
+  const ymax = niceMax(Math.max(1, ...pts.map((p) => p.v)));
+  const x = (t) => L + ((t - (now - WINDOW_S)) / WINDOW_S) * pw, y = (v) => T + ph - (v / ymax) * ph;
+  g.font = "11px system-ui, sans-serif";
+  g.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {                    /* recessive grid + y labels */
+    const v = (ymax * i) / 4, yy = Math.round(y(v)) + 0.5;
+    g.strokeStyle = css("--grid"); g.beginPath(); g.moveTo(L, yy); g.lineTo(W - R, yy); g.stroke();
+    g.fillStyle = css("--text-3"); g.textAlign = "right"; g.textBaseline = "middle";
+    g.fillText(Number.isInteger(v) ? String(v) : v.toFixed(1), L - 6, yy);
+  }
+  g.textAlign = "center"; g.textBaseline = "top";
+  for (const [s, lab] of [[WINDOW_S, "-2 min"], [60, "-1 min"], [0, "now"]]) g.fillText(lab, x(now - s), T + ph + 6);
+  const nowEl = $(ch.now);
+  if (!pts.length) { nowEl.textContent = ""; return; }
+  const last = pts[pts.length - 1].v;
+  nowEl.replaceChildren("now ", el("b", {}, ch.fmt(last).split(" ")[0]), " " + ch.fmt(last).split(" ").slice(1).join(" "));
+  g.strokeStyle = css(ch.color); g.lineWidth = 2; g.lineJoin = "round"; g.lineCap = "round";
+  g.beginPath();
+  pts.forEach((p, i) => (i ? g.lineTo(x(p.t), y(p.v)) : g.moveTo(x(p.t), y(p.v))));
+  g.stroke();
+  const tip = $(ch.tip);
+  if (hoverX === undefined || hoverX < L || hoverX > W - R) { tip.style.display = "none"; return; }
+  let best = pts[0];
+  for (const p of pts) if (Math.abs(x(p.t) - hoverX) < Math.abs(x(best.t) - hoverX)) best = p;
+  const bx = x(best.t), by = y(best.v);
+  g.strokeStyle = css("--text-3"); g.lineWidth = 1; g.beginPath(); g.moveTo(Math.round(bx) + 0.5, T); g.lineTo(Math.round(bx) + 0.5, T + ph); g.stroke();
+  g.fillStyle = css("--surface"); g.beginPath(); g.arc(bx, by, 6, 0, 2 * Math.PI); g.fill();
+  g.fillStyle = css(ch.color); g.beginPath(); g.arc(bx, by, 4, 0, 2 * Math.PI); g.fill();
+  tip.textContent = `${ch.fmt(best.v)} · ${Math.round(now - best.t)} s ago`;
+  tip.style.left = `${bx}px`; tip.style.top = `${by}px`; tip.style.display = "block";
+}
+function drawCharts() { for (const ch of Object.values(charts)) drawChart(ch, ch.hover); }
+for (const ch of Object.values(charts)) {
+  const cv = $(ch.canvas);
+  cv.addEventListener("mousemove", (e) => { ch.hover = e.offsetX; drawChart(ch, ch.hover); });
+  cv.addEventListener("mouseleave", () => { ch.hover = undefined; drawChart(ch); });
+}
+window.addEventListener("resize", drawCharts);
+
+/* ---------- live event feed (Server-Sent Events) ---------- */
+const EVENT_STYLE = {
+  dispatch: "--s1", preempt: "--s2", grant: "--s3",
+  deny_unsafe: "--warning", recovery: "--serious", deadlock_detected: "--critical",
+};
+(function legend() {
+  const lg = $("legend");
+  for (const [ev, c] of Object.entries(EVENT_STYLE)) lg.append(el("span", {}, dot(css(c)), ev));
+  lg.append(el("span", {}, dot(css("--text-3")), "other"));
+})();
+function addEvent(e) {
+  const feed = $("feed");
+  const color = css(EVENT_STYLE[e.event] || "--text-3");
+  const time = (e.ts.split("T")[1] || "").slice(0, 12);
+  const rest = Object.entries(e.fields).map(([k, v]) => `${k}=${v}`).join(" ");
+  feed.prepend(el("li", { title: e.line }, el("span", { class: "t" }, time),
+    el("span", { class: "ev" }, dot(color), e.event || e.level), el("span", { class: "rest" }, rest)));
+  while (feed.children.length > 200) feed.lastChild.remove();
+}
+function connectEvents() {
+  const es = new EventSource("/api/events");
+  es.onmessage = (m) => { try { addEvent(JSON.parse(m.data)); } catch (err) { /* ignore a bad line */ } };
+  es.onerror = () => { es.close(); setTimeout(connectEvents, 2000); };
+}
+
+/* ---------- actions ---------- */
+async function action(cmd, camp) {
+  const msg = $("msg");
+  msg.textContent = `reliefctl ${cmd}${camp !== undefined ? " " + camp : ""}…`;
+  try {
+    const r = await fetch("/api/action", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(camp === undefined ? { cmd } : { cmd, camp }) });
+    const j = await r.json();
+    msg.textContent = j.output || j.error || JSON.stringify(j);
+    if (cmd === "simulate" && r.ok) watchJob();
+  } catch (e) {
+    msg.textContent = "request failed: " + e;
+  }
+  poll();
+}
+function campValue() { const v = $("campsel").value; return v === "all" ? "all" : Number(v); }
+$("b-start").onclick = () => action("start");
+$("b-stop").onclick = () => action("stop");
+$("b-alert").onclick = () => action("alert", campValue());
+$("b-dump").onclick = () => action("dump", campValue());
+$("b-sim").onclick = () => action("simulate");
+function watchJob() {
+  clearInterval(jobTimer);
+  jobTimer = setInterval(async () => {
+    const j = await (await fetch("/api/job", { cache: "no-store" })).json();
+    if (j.running) { $("msg").textContent = `flood simulation running for ${Math.round(Date.now() / 1000 - j.started)} s…`; return; }
+    clearInterval(jobTimer);
+    $("msg").textContent = `flood simulation finished (exit ${j.rc}):\n` + j.output.split("\n").slice(-30).join("\n");
+  }, 1500);
+}
+
+/* ---------- experiments tab ---------- */
+let expLoaded = false;
+async function loadExperiments() {
+  if (expLoaded) return;
+  const box = $("experiments");
+  box.replaceChildren(el("div", { class: "empty" }, "Loading…"));
+  try {
+    const figs = await (await fetch("/api/experiments")).json();
+    if (!figs.length) { box.replaceChildren(el("div", { class: "empty" }, "No figures found in docs/EXPERIMENTS.md.")); return; }
+    const bySection = new Map();
+    for (const f of figs) { if (!bySection.has(f.section)) bySection.set(f.section, []); bySection.get(f.section).push(f); }
+    box.replaceChildren(...[...bySection].map(([sec, list]) => el("section", {}, el("h2", {}, sec),
+      el("div", { class: "figs" }, ...list.map((f) => el("figure", {}, el("img", { src: f.src, alt: f.caption, loading: "lazy" }),
+        el("figcaption", {}, f.caption)))))));
+    expLoaded = true;
+  } catch (e) {
+    box.replaceChildren(el("div", { class: "empty" }, "Could not load the experiments: " + e));
+  }
+}
+
+poll();
+setInterval(poll, 1000);
+connectEvents();
+</script>
+</body>
+</html>

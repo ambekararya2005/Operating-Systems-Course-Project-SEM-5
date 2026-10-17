@@ -49,6 +49,8 @@ commands:
   sched [--json]        live scheduler: policy, ready queue per level, what each team works on
   banker [--json]       Banker's algorithm: Allocation, Max, Need and Available per camp, and a
                         safe sequence of the current state (from shared memory)
+  web [--port N]        local web dashboard on http://127.0.0.1:N/ (default 8080; web/server.py,
+                        Python standard library only, offline); Ctrl-C stops it
   ui                    live ncurses dashboard (build/reliefui): camps, scheduler, Banker's
                         resources, dock, events; keys q p a d k s ? (works before start too)
   waitfor [--dot]       the wait-for graph: "campX -> campY [RESOURCE]" edges and any cycle;
@@ -550,6 +552,28 @@ cmd_banker() {
     fi
 }
 
+cmd_web() {
+    local opt port=8080
+    long_to_short "port=p" "$@"
+    set -- "${ARGS[@]+"${ARGS[@]}"}"
+    local OPTIND=1
+    while getopts ":p:" opt; do
+        case "$opt" in
+            p) port=$OPTARG ;;
+            :) usage_err "web: -$OPTARG needs a value" ;;
+            *) usage_err "web: unknown option -$OPTARG" ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+    (( $# == 0 )) || usage_err "web: unexpected argument '$1'"
+    if ! is_uint "$port" || (( port < 1 || port > 65535 )); then
+        usage_err "web: --port must be 1-65535"
+    fi
+    [[ -x "$BIN_DIR/reliefstat" ]] || die "reliefstat not built; run 'make' first"
+    command -v python3 >/dev/null || die "python3 not found"
+    RELIEF_BIN_DIR="$BIN_DIR" exec python3 -I "$ROOT/web/server.py" --port "$port"
+}
+
 cmd_ui() {
     [[ -x "$BIN_DIR/reliefui" ]] || die "reliefui not built; run 'make' first"
     # The dashboard calls this script for start/stop/alert/dump, with the same RELIEF_HOME.
@@ -680,6 +704,7 @@ main() {
         banker)         cmd_banker "$@" ;;
         waitfor)        cmd_waitfor "$@" ;;
         ui)             cmd_ui "$@" ;;
+        web)            cmd_web "$@" ;;
         ps)             cmd_ps "$@" ;;
         tree)           cmd_tree "$@" ;;
         alert)          cmd_alert "$@" ;;

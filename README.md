@@ -23,6 +23,8 @@ reliefd (`--policy`, `--teams`), and `schedsim` replays scenarios offline.
 - `camp`: one process per relief camp, started by reliefd. It sends requests to reliefd over `/reliefos_requests`
 - `reliefctl`: Bash CLI
 - `reliefui`: live ncurses dashboard, like htop (`make ui` or `scripts/reliefctl ui`)
+- `web/`: local web dashboard (`scripts/reliefctl web`, then open http://127.0.0.1:8080/): Python standard library
+  only, no CDN, works offline
 - `scripts/demo.sh`: a guided demo of Phases 1-3, one syllabus topic per step (`-u` adds the dashboard)
 - `relief.ko`: kernel module exposing `/proc/relief` (Phase 6)
 - `systemd/reliefd.service`: systemd unit template (Phase 6)
@@ -171,6 +173,25 @@ Keys: `q` quit, `p` pause, `a` alert a camp, `d` dump, `k` kill -9 a camp (watch
 It copies the shared-memory table with the lock-free seqlock and never takes reliefd's mutex.
 Without a terminal, `reliefui --batch N` draws N frames to stdout (tests).
 
+### Web dashboard
+```sh
+scripts/reliefctl web               # prints: ReliefOS web dashboard: http://127.0.0.1:8080/   (--port N to change)
+```
+Open that URL in a browser on the same machine. With WSL2, a Windows browser reaches it too, because
+localhost is forwarded.
+- **Live tab:**
+  - camp cards (state, `/proc` state, requests, heartbeat);
+  - two hand-drawn canvas charts of the last 2 minutes: requests/s and ready-queue length, hover for values;
+  - the Banker's Available/Total bars with safe/unsafe, and the dock's 8 slots;
+  - a colour-coded live event feed (Server-Sent Events from `reliefd.log`);
+  - buttons: Start, Stop, Evacuation alert, Status dump and Run flood simulation.
+- **Experiments tab:** every figure of `docs/EXPERIMENTS.md` with its caption.
+- **Light and dark themes** follow the system, with a toggle.
+- **Safety:**
+  - the server binds to 127.0.0.1 only;
+  - actions go through an allow-list to `reliefctl` as an argument list, never a shell;
+  - requests with a foreign Host or Origin, or a POST that is not JSON, are refused.
+
 ### Deadlock: none, prevent, detect
 `scenarios/deadlock.csv` is a reproducible circular wait: camps 1 and 2 each hold a truck and a boat and ask
 for the other's. Rows sharing the optional 7th CSV column (`task`) are acquired one after another and held
@@ -209,6 +230,7 @@ and `logs/reliefd.out` (raw stderr). You never need root.
 | `stop`     | Stops reliefd with SIGTERM. reliefd stops and reaps every camp |
 | `status [--json]` | Shows whether reliefd is running, then the live camp table from shared memory (`reliefstat`): pid, state, requests sent, heartbeat, restarts |
 | `sched [--json]` | Live scheduler: policy, ready queue per level, and what each rescue team is working on |
+| `web [--port N]` | Local web dashboard on http://127.0.0.1:N/ (default 8080), offline, Ctrl-C stops it |
 | `ui` | Live ncurses dashboard (`build/reliefui`); keys `q p a d k s ?`; works before `start` too |
 | `waitfor [--dot]` | Wait-for graph: `campX -> campY [RESOURCE]` edges and any cycle; `--dot` prints Graphviz DOT |
 | `banker [--json]` | Banker's algorithm in textbook layout: Allocation, Max, Need and Available per camp, and a safe sequence of the current state |

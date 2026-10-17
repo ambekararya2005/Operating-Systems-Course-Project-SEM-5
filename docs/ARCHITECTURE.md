@@ -10,6 +10,8 @@
 - **reliefctl**: Bash control CLI
 - **reliefstat**: read-only viewer of the live status table
 - **reliefui**: live ncurses dashboard over the same table (`src/reliefui/main.c`)
+- **web/server.py**: local web dashboard (127.0.0.1 only). It reads the table through `reliefstat --json`,
+  tails `reliefd.log` as Server-Sent Events, and runs allow-listed `reliefctl` commands
 - **schedsim**: offline, deterministic scheduling simulator (Phase 2)
 - **linuxsched**: real threads under the Linux scheduler (CFS/EEVDF + nice, SCHED_FIFO, SCHED_RR) for E2
 - **relief.ko**: kernel module exposing `/proc/relief` (Phase 6)

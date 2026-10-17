@@ -13,6 +13,7 @@
 #                   + tests/deadlock.sh (deadlock.csv under none/prevent/avoid/detect, waitfor, mix)
 #                   + tests/phase3_check.sh (gate M3: critical section, dock, Banker's, zero deadlocks in E3)
 #                   + tests/ui.sh (reliefui --batch: dashboard drawn from the status table)
+#                   + tests/web.sh (web/server.py: status, events, allow-listed actions, figures)
 #   make tsan       ThreadSanitizer build in build/tsan/ + tests
 #   make valgrind   tests with reliefd and camps under valgrind
 #   make run        run reliefd in the foreground (RELIEF_HOME=./run)
@@ -83,7 +84,7 @@ SHM_DIE_OBJ := $(SHM_DIE_SRC:%.c=$(OBJ)/%.o)
 TESTS := tests/smoke.sh tests/camps.sh tests/traffic.sh tests/signals.sh tests/status.sh tests/cli.sh \
          tests/phase1_smoke.sh tests/sched.sh tests/dispatch.sh tests/linuxsched.sh tests/phase2_check.sh \
          tests/racelab.sh tests/sync.sh tests/dock.sh tests/banker.sh tests/deadlock.sh \
-         tests/phase3_check.sh tests/ui.sh
+         tests/phase3_check.sh tests/ui.sh tests/web.sh
 
 # --trace-children: camps exec'd by reliefd also run under valgrind.
 VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
