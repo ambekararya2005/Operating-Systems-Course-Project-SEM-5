@@ -121,7 +121,7 @@ On the flood scenario with 3 teams (`schedsim --policy P --teams 3`):
 ### Critical section: racelab
 Two camps (threads) share one boat and both add N to one inventory counter (read, modify, write):
 ```sh
-build/racelab --mode none               # race condition: about 44% of 2,000,000 updates lost
+build/racelab --mode none               # race condition: about 45% of 2,000,000 updates lost
 build/racelab --mode peterson-nofence   # textbook Peterson: loses a few dozen on x86 (store buffers)
 build/racelab --mode peterson           # with a seq_cst fence: always 2,000,000
 build/racelab --mode mutex|spinlock|semaphore [--iters N] [--threads 1] [--csv F]

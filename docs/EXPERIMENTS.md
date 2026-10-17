@@ -459,21 +459,21 @@ modify and write, inside the entry and exit sections of mode M:
 ### Results
 | Mode | Lost updates, mean (min–max) | Runs that lost updates | Runtime, ms, mean (min–max) | ns per increment |
 |------|-----------------------------:|-----------------------:|----------------------------:|-----------------:|
-| `none` | 880,478 (812,723–925,737) | 10/10 | 16.8 (16.5–17.4) | 8.4 |
-| `peterson-nofence` | 31.6 (10–58) | **10/10** | 100.5 (59.3–109.5) | 50.2 |
-| `peterson` | 0 | 0/10 | 72.9 (51.0–88.7) | 36.4 |
-| `spinlock` | 0 | 0/10 | 38.8 (30.0–47.8) | 19.4 |
-| `mutex` | 0 | 0/10 | 41.8 (36.4–45.1) | 20.9 |
-| `semaphore` | 0 | 0/10 | 115.0 (102.9–125.8) | 57.5 |
+| `none` | 896,307 (852,297–977,276) | 10/10 | 16.9 (16.3–17.4) | 8.4 |
+| `peterson-nofence` | 34.8 (8–93) | **10/10** | 100.8 (57.8–110.5) | 50.4 |
+| `peterson` | 0 | 0/10 | 76.5 (73.9–79.7) | 38.3 |
+| `spinlock` | 0 | 0/10 | 32.6 (25.8–41.5) | 16.3 |
+| `mutex` | 0 | 0/10 | 42.7 (37.9–45.2) | 21.4 |
+| `semaphore` | 0 | 0/10 | 111.6 (101.3–123.1) | 55.8 |
 
 ![Lost updates per mode](figures/e4/e4_error.png)
 ![Runtime per mode](figures/e4/e4_runtime.png)
 
 ### What the data shows
-- **No protection loses about 44% of the updates,** and the final count is different every run
-  (between 1.07 and 1.19 million instead of 2 million). Both threads load the same value, both add 1,
+- **No protection loses about 45% of the updates,** and the final count is different every run
+  (between 1.02 and 1.15 million instead of 2 million). Both threads load the same value, both add 1,
   and both store it, so one increment disappears. The race window is the whole read-modify-write.
-- **The textbook Peterson fails on x86 in every run, but only rarely within a run:** it lost 10–58 of
+- **The textbook Peterson fails on x86 in every run, but only rarely within a run:** it lost 8–93 of
   2,000,000 updates (an earlier check: 20 failing runs out of 20). Peterson's proof assumes sequential
   consistency. x86 is TSO, which keeps every ordering *except* store → load. Each core holds its
   stores in a private store buffer and lets later loads overtake them. So thread 0 can still be
@@ -482,19 +482,19 @@ modify and write, inside the entry and exit sections of mode M:
   Textbooks assume sequential consistency because it makes the algorithm provable on paper; CPUs
   give it up for speed. The fenced `peterson` drains the store buffer before the loads and lost
   nothing in 10 runs (and in 20 extra runs). ThreadSanitizer also passes it, because its flags are C11 atomics.
-- **The fence is not what makes Peterson slow.** `peterson` (73 ms) is faster than the unfenced version
+- **The fence is not what makes Peterson slow.** `peterson` (77 ms) is faster than the unfenced version
   (101 ms), and both are about 2× slower than the spinlock or mutex. The likely cause, which we did not
   measure, is that Peterson hands the turn to the other camp whenever both want in. Under constant
   contention that becomes near-strict alternation, so the counter and flag cache lines move between
   cores on almost every increment. The spinlock and mutex are not fair: the thread that just unlocked
   usually relocks at once while the line is still in its cache.
-- **Spinlock vs mutex:** they are about the same here (39 vs 42 ms). The critical section is a few
+- **Spinlock vs mutex:** they are about the same here (33 vs 43 ms). The critical section is a few
   nanoseconds, so a spinning waiter gets the lock almost immediately. A spinlock wastes a whole CPU
   while it waits, so it only pays off for very short sections on a multiprocessor. With one CPU, or a
   long section, the mutex wins because its waiter sleeps.
-- **The semaphore is the slowest correct mode** (115 ms). It does the same job as the mutex but goes
-  through glibc's general counting-semaphore code and made more futex calls under contention (593 vs
-  396). We did not profile further.
+- **The semaphore is the slowest correct mode** (112 ms). It does the same job as the mutex but goes
+  through glibc's general counting-semaphore code and made more futex calls under contention (450 vs
+  348). We did not profile further.
 
 ### How a Linux mutex becomes a futex (strace)
 `run_e4.sh` also runs `strace -f -e trace=futex -c` on each primitive. The full output is in
@@ -502,9 +502,9 @@ modify and write, inside the entry and exit sections of mode M:
 
 | Run | Lock operations | futex system calls |
 |-----|----------------:|-------------------:|
-| `mutex`, 2 threads (contended) | 2,000,000 | 396 (134 returned EAGAIN) |
+| `mutex`, 2 threads (contended) | 2,000,000 | 348 (113 returned EAGAIN) |
 | `mutex`, 1 thread (uncontended) | 1,000,000 | 3 |
-| `semaphore`, 2 threads | 2,000,000 | 593 (229 EAGAIN) |
+| `semaphore`, 2 threads | 2,000,000 | 450 (169 EAGAIN) |
 | `semaphore`, 1 thread | 1,000,000 | 3 |
 | `spinlock`, 2 threads | 2,000,000 | 4 |
 
@@ -515,7 +515,7 @@ modify and write, inside the entry and exit sections of mode M:
   only when that CAS finds the lock taken: `FUTEX_WAIT` puts the thread to sleep in the kernel, and the
   unlocker sees the waiter bit and calls `FUTEX_WAKE`. EAGAIN means the lock word changed between the
   failed CAS and the `FUTEX_WAIT`, so the kernel returned at once instead of sleeping.
-- **Even under full contention,** only about 1 lock operation in 5,000 needed the kernel (396 of
+- **Even under full contention,** only about 1 lock operation in 5,700 needed the kernel (348 of
   2,000,000). The semaphore is built the same way.
 - **The spinlock never makes a system call:** it waits by spinning on the CPU instead.
 - strace stops the traced thread on every futex call, which changes the timing and therefore the

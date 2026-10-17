@@ -7,16 +7,16 @@
 
 == mode=mutex threads=2 (contended)
 $ strace -f -e trace=futex -c build/racelab --mode mutex --threads 2 --iters 1000000
-mode=mutex threads=2 iters=1000000 expected=2000000 final=2000000 error=0 lost_pct=0.000 runtime_ms=28.83 ns_per_increment=14.4
+mode=mutex threads=2 iters=1000000 expected=2000000 final=2000000 error=0 lost_pct=0.000 runtime_ms=27.49 ns_per_increment=13.7
 % time     seconds  usecs/call     calls    errors syscall
 ------ ----------- ----------- --------- --------- ----------------
-100.00    0.010858          27       396       134 futex
+100.00    0.020849          59       348       113 futex
 ------ ----------- ----------- --------- --------- ----------------
-100.00    0.010858          27       396       134 total
+100.00    0.020849          59       348       113 total
 
 == mode=mutex threads=1 (uncontended: one thread)
 $ strace -f -e trace=futex -c build/racelab --mode mutex --threads 1 --iters 1000000
-mode=mutex threads=1 iters=1000000 expected=1000000 final=1000000 error=0 lost_pct=0.000 runtime_ms=6.56 ns_per_increment=6.6
+mode=mutex threads=1 iters=1000000 expected=1000000 final=1000000 error=0 lost_pct=0.000 runtime_ms=6.03 ns_per_increment=6.0
 % time     seconds  usecs/call     calls    errors syscall
 ------ ----------- ----------- --------- --------- ----------------
   0.00    0.000000           0         3           futex
@@ -25,27 +25,27 @@ mode=mutex threads=1 iters=1000000 expected=1000000 final=1000000 error=0 lost_p
 
 == mode=semaphore threads=2 (contended)
 $ strace -f -e trace=futex -c build/racelab --mode semaphore --threads 2 --iters 1000000
-mode=semaphore threads=2 iters=1000000 expected=2000000 final=2000000 error=0 lost_pct=0.000 runtime_ms=43.45 ns_per_increment=21.7
+mode=semaphore threads=2 iters=1000000 expected=2000000 final=2000000 error=0 lost_pct=0.000 runtime_ms=33.36 ns_per_increment=16.7
 % time     seconds  usecs/call     calls    errors syscall
 ------ ----------- ----------- --------- --------- ----------------
-100.00    0.036112          60       593       229 futex
+100.00    0.025440          56       450       169 futex
 ------ ----------- ----------- --------- --------- ----------------
-100.00    0.036112          60       593       229 total
+100.00    0.025440          56       450       169 total
 
 == mode=semaphore threads=1 (uncontended: one thread)
 $ strace -f -e trace=futex -c build/racelab --mode semaphore --threads 1 --iters 1000000
-mode=semaphore threads=1 iters=1000000 expected=1000000 final=1000000 error=0 lost_pct=0.000 runtime_ms=7.54 ns_per_increment=7.5
+mode=semaphore threads=1 iters=1000000 expected=1000000 final=1000000 error=0 lost_pct=0.000 runtime_ms=6.90 ns_per_increment=6.9
 % time     seconds  usecs/call     calls    errors syscall
 ------ ----------- ----------- --------- --------- ----------------
-  0.00    0.000000           0         3           futex
+100.00    0.002097         699         3           futex
 ------ ----------- ----------- --------- --------- ----------------
-100.00    0.000000           0         3           total
+100.00    0.002097         699         3           total
 
 == mode=spinlock threads=2 (contended)
 $ strace -f -e trace=futex -c build/racelab --mode spinlock --threads 2 --iters 1000000
-mode=spinlock threads=2 iters=1000000 expected=2000000 final=2000000 error=0 lost_pct=0.000 runtime_ms=31.31 ns_per_increment=15.7
+mode=spinlock threads=2 iters=1000000 expected=2000000 final=2000000 error=0 lost_pct=0.000 runtime_ms=32.98 ns_per_increment=16.5
 % time     seconds  usecs/call     calls    errors syscall
 ------ ----------- ----------- --------- --------- ----------------
-100.00    0.005251        1312         4           futex
+100.00    0.003087         771         4           futex
 ------ ----------- ----------- --------- --------- ----------------
-100.00    0.005251        1312         4           total
+100.00    0.003087         771         4           total

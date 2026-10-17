@@ -533,6 +533,73 @@ sudo apt install graphviz
 dot -Tpng docs/waitfor.dot -o docs/waitfor.png
 ```
 
+## Phase 3: the lock hierarchy (why reliefd itself cannot deadlock)
+reliefd runs many threads:
+- the main thread;
+- the rescue teams and the clock;
+- the dock's producers and trucks;
+- the Banker's allocator and the detector.
+
+The camps are separate processes. The rule that keeps our own code free of deadlocks is resource
+ordering, the same technique as `--deadlock prevent`, applied to locks. Every lock has a level. A
+thread may take a lock only if every lock it already holds has a *lower* level. A cycle of threads
+each waiting for a lock the next one holds would need L1 < L2 < … < L1, which is impossible, so the
+circular-wait condition can never hold.
+
+| Level | Lock | Kind | Guards | Taken by |
+|------:|------|------|--------|----------|
+| 1 | `resmgr.lock` (+ condvars `wake`, `tick`) | pthread mutex | Banker's state, waiting/granted lists, reply queues | main thread, allocator, detector |
+| 1 | `dispatcher.lock` (+ condvar `work`) | pthread mutex | ready queue, running jobs, counters | main thread, teams, clock |
+| 2 | `dock.olock` (+ condvar `ocond`) | pthread mutex | the dock's order FIFO | main thread, allocator (via `on_grant`), producers |
+| 3 | dock `mutex` (and the counting semaphores `empty`, `full`) | POSIX semaphores | the circular buffer and its statistics | producers, trucks, main thread (`dock_publish`) |
+| 3 | `inventory.rw` | rwsync: semaphores or pthread rwlock | stock per warehouse | producers (write), trucks + main thread (read) |
+| 4 | shm `lock` (`/reliefos_status`) | process-shared, robust pthread mutex | the status table | reliefd's publishers, every camp (its own row) |
+| 5 | `g_log_lock` | pthread mutex | the log sinks | everyone; always last |
+
+The two locks at level 1 are never held together, and neither are the two at level 3.
+
+```
+   level 1   resmgr.lock ───────────────┐            dispatcher.lock
+                │ on_grant: kits → dock  │                  │ publish_locked
+                ▼                        │                  │
+   level 2   dock.olock                  │                  │
+                                         │                  │
+   level 3   dock mutex (sem)   inventory.rw                │
+                │ note_produce/consume   (taken alone)      │
+                │                        │                  ▼
+   level 4      │                        │            shm status lock ◄── camps (alone)
+                ▼                        ▼                  │
+   level 5   g_log_lock ◄─────────────────────────────────────┘   (leaf: never takes another lock)
+```
+Every arrow points down. These are the only places that take a second lock while holding one,
+checked by reading every lock site:
+- **resmgr → dock order queue:** `resmgr.lock → dock.olock`: a granted kit request goes on to the
+  dock (`on_grant` → `dock_submit`).
+- **dispatcher → shm:** `dispatcher.lock → shm lock`: `publish_locked` copies the scheduler state
+  into the status table.
+- **anything → log:** `dock mutex → log` (produce/consume are logged inside the buffer's critical
+  section, so the log is the buffer's exact history), `resmgr.lock → log`, `dispatcher.lock → log`,
+  `shm lock → log` (a robust-mutex recovery warning).
+
+**Copy, release, publish.** The dock, the inventory and the resource manager never nest with the
+shm lock. Each copies its state under its own lock, releases it, then takes the shm lock
+(`dock_publish`, `inventory_publish`, `resmgr_publish`), which keeps the graph shallow.
+
+**Waits that are not locks:**
+- **Dock semaphores:** a producer waits on `empty` and a truck on `full` *before* taking the
+  buffer's `mutex`, and never while holding any other lock. Taking `mutex` first would deadlock a
+  full dock: the textbook ordering note next to `dockbuf_put`.
+- **Condition variables** release their mutex while waiting.
+- **Reply queues:** the allocator sends replies to the camps' queues while holding
+  `resmgr.lock`, but with a bounded `mq_timedsend` (5 × 100 ms). A camp that stops reading can
+  delay the allocator, never block it forever. An undeliverable grant is undone, so the Banker's
+  state stays consistent.
+
+**Signals and processes:** worker threads block every signal, so handlers (which only set flags)
+always run on the main thread, where no lock is held at that point. A camp is single-threaded. It takes the shm lock to update its own row, and inside it at most its
+own log lock (level 4 → 5, a recovery warning). It never waits for reliefd while holding them. The robust mutex
+(`EOWNERDEAD`) means a camp that dies holding it cannot block reliefd.
+
 ## Structured log (`$RELIEF_HOME/logs/reliefd.log`)
 One event per line: `ts=<iso8601> level=<lvl> comp=reliefd pid=<pid> event=<name> key=value ...`.
 Values contain no spaces, except `msg="..."` on free-form `event=log` lines. Events include
