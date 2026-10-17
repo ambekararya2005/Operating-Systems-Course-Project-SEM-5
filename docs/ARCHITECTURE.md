@@ -336,6 +336,59 @@ boat's inventory". Each entry/exit section sits behind a `lock_ops_t` (`init`, `
   fences, and release/acquire gives it the happens-before edge it needs.
 - **Results:** experiment E4 in EXPERIMENTS.md. `docs/strace_futex.txt` has the futex counts.
 
+## Phase 3: loading dock and inventory (`src/reliefd/dock.c`, `inventory.c`, `src/common/rwsync.c`)
+### Producer–consumer: warehouses → loading dock → trucks
+```
+main thread (mq loop)             P producer threads                  C truck threads
+ kit request ──dock_submit──► orders FIFO ──► take kits from inventory ──► dock ──► deliver (sleep distance)
+                              (mutex+cond)    (write lock), pack                    read stock (read lock)
+                                              1 + qty/50 min        bounded buffer:
+                                                                    empty / full / mutex semaphores
+```
+- **Which requests:** FOOD_KIT, MED_KIT and HYGIENE_KIT requests go to the dock (`dock=1` on the
+  `event=request` line). RESCUE requests go to the scheduler. TRUCK and BOAT are logged only.
+- **The dock** is a circular buffer of `--dock` slots (default 8), protected by the three
+  textbook semaphores: `empty` = free slots, `full` = packages, `mutex` = buffer update. The
+  textbook pseudocode sits next to `dockbuf_put` / `dockbuf_take`.
+  - **Wait order:** `wait(empty)` comes before `wait(mutex)`. The other order deadlocks when the
+    dock is full.
+  - **Logging:** each put or take logs `event=produce` / `event=consume` with `occupancy=` from
+    inside the critical section, so the log's occupancy sequence is the buffer's exact history
+    (`tests/dock.sh` replays it).
+  - **Blocked time:** a producer that finds the dock full (`sem_trywait` fails) times its
+    `wait(empty)`. That time goes into `blocked_min=` on its produce line and into the
+    `blocked_puts` / `blocked_min` totals.
+- **Threads:** `--producers` (default 2) and `--trucks` (default 4). A trip to camp c takes
+  `dock_distance_min(c)` simulated minutes, a fixed table of 4–16 min for the 8 Pune camps.
+  Producers and trucks block every signal, as the rescue teams do, so SIGCHLD and SIGTERM always
+  interrupt the main thread's `mq_timedreceive`.
+- **Stop** (`dock_stop`, after the scheduler stops):
+  1. Pending orders are abandoned, and packing and trips in progress are cut short (logged).
+  2. The producers are joined.
+  3. One poison pill (package id 0) per truck goes through the same buffer, and the trucks are
+     joined.
+  4. `event=dock_stop` logs the totals, including the time-weighted average occupancy.
+- **Status:** the main loop copies the dock counters into the shm status table, which
+  `reliefstat` / `reliefctl status` print. `reliefctl report` shows the dock's average occupancy
+  and the time producers spent blocked on a full dock.
+
+### Readers–writers: the inventory
+- **Data:** stock of 3 kit types in 2 warehouses (camp c is served by warehouse (c − 1) mod 2).
+- **Readers:** the main thread's status publisher and every truck's delivery note (`stock_left=`).
+  The Banker's checks will join them later.
+- **Writers:** producers deducting the kits they pack, and restocks (+2000 when a pack would go
+  below zero).
+- **One interface, two implementations** (`include/rwsync.h`, chosen with `reliefd --rw`):
+  - `semaphore`: the textbook first readers-writers solution, with `read_count`, `mutex` and
+    `rw_mutex`. `rw_mutex` must be a semaphore, not a mutex: the first reader takes it and the last
+    reader, a different thread, releases it. Readers have preference, so overlapping readers
+    starve a writer.
+  - `rwlock` (the default): `pthread_rwlock_t` with `PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP`.
+    A waiting writer blocks new readers.
+- **`build/rwlab`** measures the difference (E5).
+- **Lock order:** the inventory lock and the dock `mutex` are never held together with the shm
+  lock. Each publisher copies under its own lock, releases it, then writes the shm.
+
 ## Structured log (`$RELIEF_HOME/logs/reliefd.log`)
 One event per line: `ts=<iso8601> level=<lvl> comp=reliefd pid=<pid> event=<name> key=value ...`.
 Values contain no spaces, except `msg="..."` on free-form `event=log` lines. Events include

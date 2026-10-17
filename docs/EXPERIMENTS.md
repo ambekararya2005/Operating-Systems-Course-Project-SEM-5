@@ -9,6 +9,7 @@ Every experiment is deterministic for a given `--seed` and writes CSV to `experi
 | E1b | CPU scheduling under load (Unit 2) | At what offered load does MLFQ stop reaching zero starvation, and how do prio-preempt, mlfq and mlfq-floor degrade? | done |
 | E2 | Traditional and modern UNIX scheduling (Unit 2) | How do Linux's CFS/EEVDF + nice, SCHED_FIFO and SCHED_RR treat the same rescue workload, compared with textbook priority and our MLFQ? | done |
 | E4 | Critical-section problem, Peterson, semaphores; synchronisation in Linux (Unit 3) | Which entry/exit sections keep a shared counter correct, what does each cost, and when does a Linux mutex enter the kernel? | done |
+| E5 | Readers-writers problem (Unit 3) | Does the textbook readers-preference solution starve writers, and does a writer-preference rwlock fix it? | done |
 
 ## E1: triage scheduling comparison
 
@@ -425,6 +426,35 @@ modify and write, inside the entry and exit sections of mode M:
   sequential consistency it assumes.
 - The Linux primitives (futex-based mutex and semaphore) and a test-and-set spinlock are all correct.
   The mutex costs about 21 ns per increment here, and it only enters the kernel when there is a waiter.
+
+## E5: readers–writers, writer starvation
+**Question:** The inventory is read by many threads and written rarely. Does the textbook
+readers-preference solution (semaphores `mutex` and `rw_mutex`, plus `read_count`) starve the
+writer? Does glibc's writer-preference rwlock fix that, and what does it cost the readers?
+
+**Setup:** `make e5` (`experiments/run_e5.sh`) runs `build/rwlab --rw semaphore|rwlock`:
+- 8 reader threads each hold the read lock for 100 µs, reading the whole inventory table, and
+  re-enter at once.
+- 1 writer thread updates the table (20 µs under the write lock) every 2 ms.
+- Each run lasts 2 s; 5 runs per kind, interleaved, on 16 CPUs (WSL2, kernel 6.18).
+- Every lock acquisition is timed, and every read checks that the table is not half-written.
+- Results go to `experiments/results/e5.csv`. The numbers are real timings and vary between runs.
+
+| Lock (`--rw`) | Writes during the 2 s (mean per run) | Writer wait, mean | Writer wait, max | Reads per run | Reader wait, max | Torn reads |
+|---------------|------:|------:|------:|------:|------:|---:|
+| `semaphore` (readers preference) | **0** | 1,999 ms | 2,000 ms | 158,989 | 0.12 ms | 0 |
+| `rwlock` (writer preference) | 901 | 0.12 ms | 0.20 ms | 150,148 | 0.28 ms | 0 |
+
+**Conclusion:**
+- **The semaphore version starves the writer completely:** 0 writes in every run. Its one write
+  happens only when the readers stop, after waiting the whole run. With 8 readers overlapping,
+  `read_count` never drops to 0, so `rw_mutex` is never released to the writer.
+- **The writer-preference rwlock removes the starvation:** a waiting writer blocks new readers,
+  so it waits only for the readers already inside (at most one 100 µs read).
+- **The readers pay a little:** 5.6% fewer reads, and a worst-case reader wait of 0.28 ms instead
+  of 0.12 ms.
+- **reliefd's choice:** it uses `rwlock` by default (`--rw`), because a restock or a delivery must
+  not wait behind an endless stream of status reads.
 
 ## Baseline (Phase 2 step 2)
 `schedsim --teams 3` on `scenarios/flood_pune.csv` (200 requests in 360 min, permanently overloaded). The

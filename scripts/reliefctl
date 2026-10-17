@@ -12,6 +12,7 @@
 #   RELIEF_TIME_SCALE  real ms per simulated minute (default: 100; 0 = no pacing)
 #   RELIEF_POLICY      live scheduling policy for RESCUE requests (default: fcfs)
 #   RELIEF_TEAMS       rescue team threads (default: 3)
+#   RELIEF_DOCK_ARGS   extra reliefd options for the loading dock, e.g. "--dock 4 --trucks 2 --rw semaphore"
 #
 # Exit status: 0 success, 1 runtime error (e.g. reliefd not running), 2 usage error.
 set -euo pipefail
@@ -28,6 +29,7 @@ SCENARIO=${RELIEF_SCENARIO:-$ROOT/scenarios/flood_pune.csv}
 TIME_SCALE=${RELIEF_TIME_SCALE:-100}
 POLICY=${RELIEF_POLICY:-fcfs}
 TEAMS=${RELIEF_TEAMS:-3}
+read -r -a DOCK_ARGS <<< "${RELIEF_DOCK_ARGS:-}"
 PIDFILE="$RELIEF_HOME/reliefd.pid"
 CAMPS_PIDS="$RELIEF_HOME/camps.pids"    # camp table published by reliefd: "<id> <pid> <state> <name>"
 LOGDIR="$RELIEF_HOME/logs"
@@ -49,11 +51,13 @@ commands:
   alert <camp-id|all>   evacuation alert (SIGUSR1): the camp's next 5 requests become CRITICAL
   dump  <camp-id|all>   status dump (SIGUSR2): print the camp's counters
   report [--since MIN | --last-run]
-                        requests per camp, severity and resource, and the scheduler's
-                        per-severity waits, from the structured log
+                        requests per camp, severity and resource, the loading dock (occupancy,
+                        producers blocked on a full dock) and the scheduler's per-severity
+                        waits, from the structured log
   simulate flood [--camps N] [--seed S] [--rows R] [--time-scale MS] [--policy P] [--teams T]
-                        generate a scenario, run it to completion (every camp sends BYE and
-                        every RESCUE request is served), stop reliefd and print the report
+                        generate a scenario, run it to completion (every camp sends BYE, every
+                        RESCUE request is served and every kit delivered), stop reliefd and
+                        print the report
   help                  this message
 
 logs: \$RELIEF_HOME/logs/reliefd.log (key=value), reliefd.out (raw stderr)
@@ -132,7 +136,7 @@ start_daemon() {
     rm -f "$PIDFILE"
     mkdir -p "$LOGDIR"
     nohup "${WRAP[@]}" "$BIN_DIR/reliefd" --camps "$CAMPS" --scenario "$SCENARIO" \
-        --time-scale "$TIME_SCALE" --policy "$POLICY" --teams "$TEAMS" "$@" \
+        --time-scale "$TIME_SCALE" --policy "$POLICY" --teams "$TEAMS" "${DOCK_ARGS[@]+"${DOCK_ARGS[@]}"}" "$@" \
         >>"$OUTFILE" 2>&1 </dev/null &
     for _ in $(seq 50); do
         if pid=$(daemon_pid); then
@@ -386,6 +390,30 @@ cmd_report() {
             promotes++; next
         }
         / event=sched_stop / { parse(); abandoned += f["abandoned"]; next }
+        / event=dock_start / { parse(); dcap = f["capacity"]; dprod = f["producers"]; dtrucks = f["trucks"]; drw = f["rw"]; next }
+        / event=dock_stop / {
+            if (cutoff != "" && substr($1, 4, 19) < cutoff) next
+            parse(); dtw = f["avg_occupancy"]; dstops++; next
+        }
+        / event=(produce|consume) / {
+            if (cutoff != "" && substr($1, 4, 19) < cutoff) next
+            parse()
+            occ += f["occupancy"]; nocc++
+            if (f["occupancy"] + 0 > maxocc) maxocc = f["occupancy"] + 0
+            if ($0 ~ / event=produce /) {
+                nprod++
+                if (f["blocked_min"] + 0 > 0) { nblocked++; blocked += f["blocked_min"] }
+            } else ncons++
+            next
+        }
+        / event=deliver / {
+            if (cutoff != "" && substr($1, 4, 19) < cutoff) next
+            parse(); ndel++; age += f["age_min"]; next
+        }
+        / event=restock / {
+            if (cutoff != "" && substr($1, 4, 19) < cutoff) next
+            restocks++; next
+        }
         / event=complete / {
             if (cutoff != "" && substr($1, 4, 19) < cutoff) next
             parse()
@@ -430,6 +458,20 @@ cmd_report() {
             printf "\nBusiest camp: %d %s (%d requests, %.1f%%)\n", busiest,
                    (busiest in name) ? name[busiest] : "?", best, 100 * best / total
 
+            printf "\nLoading dock (kit packages, warehouse producers -> trucks; times in simulated minutes)\n"
+            if (nprod + ncons == 0) print "  no dock activity in this window"
+            else {
+                printf "  capacity %s, %s producers, %s trucks, inventory lock %s\n", dcap == "" ? "?" : dcap,
+                       dprod == "" ? "?" : dprod, dtrucks == "" ? "?" : dtrucks, drw == "" ? "?" : drw
+                printf "  produced %d, consumed %d, delivered %d, restocks %d\n", nprod, ncons, ndel, restocks + 0
+                printf "  average occupancy %.2f (sampled at each put and take), max %d", occ / nocc, maxocc
+                if (dstops == 1) printf "; time-weighted %.2f", dtw
+                printf "\n  producers blocked on a full dock: %d of %d puts, %.1f min in total", nblocked + 0, nprod, blocked
+                if (nblocked) printf " (%.1f per blocked put)", blocked / nblocked
+                printf "\n"
+                if (ndel) printf "  average time from dock to delivery: %.1f min\n", age / ndel
+            }
+
             printf "\nScheduler (RESCUE requests; times in simulated minutes)\n"
             if (done == 0) { print "  no completed RESCUE requests in this window"; exit 0 }
             printf "  policy %s, %s teams: completed %d, average wait %.1f, average turnaround %.1f\n",
@@ -463,7 +505,7 @@ make_camps_conf() {
 
 cmd_simulate() {
     local opt kind camps=8 seed=2019 rows=200 scale=10 policy=$POLICY teams=$TEAMS
-    local dir conf csv start_line byes=0 dpid timeout_s v sched=0 served=0
+    local dir conf csv start_line byes=0 dpid timeout_s v sched=0 served=0 kits=0 delivered=0
     [[ $# -ge 1 ]] || usage_err "usage: $PROG simulate flood [--camps N] [--seed S] [--rows R] [--time-scale MS] [--policy P] [--teams T]"
     kind=$1
     shift
@@ -524,16 +566,20 @@ cmd_simulate() {
     (( byes >= camps )) || { cmd_stop >/dev/null || true; die "timed out: $byes of $camps camps sent BYE"; }
     echo "all $camps camps sent BYE"
 
-    # Then wait until the rescue teams have served every scheduled request.
+    # Then wait until the rescue teams have served every scheduled request and the trucks
+    # have delivered every kit package.
     for _ in $(seq $((timeout_s * 10))); do
         sched=$(tail -n +"$start_line" "$EVENTLOG" | grep -c ' event=request .* sched=1' || true)
         served=$(tail -n +"$start_line" "$EVENTLOG" | grep -c ' event=complete ' || true)
-        (( served >= sched )) && break
+        kits=$(tail -n +"$start_line" "$EVENTLOG" | grep -c ' event=request .* dock=1' || true)
+        delivered=$(tail -n +"$start_line" "$EVENTLOG" | grep -c ' event=deliver ' || true)
+        (( served >= sched && delivered >= kits )) && break
         kill -0 "$dpid" 2>/dev/null || die "reliefd exited during the simulation; see $OUTFILE"
         sleep 0.1
     done
     (( served >= sched )) || { cmd_stop >/dev/null || true; die "timed out: $served of $sched RESCUE requests served"; }
-    echo "all $sched RESCUE requests served by the teams"
+    (( delivered >= kits )) || { cmd_stop >/dev/null || true; die "timed out: $delivered of $kits kit packages delivered"; }
+    echo "all $sched RESCUE requests served by the teams, all $kits kit packages delivered"
     cmd_stop
     echo
     cmd_report --last-run

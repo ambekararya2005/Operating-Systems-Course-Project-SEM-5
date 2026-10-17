@@ -7,10 +7,15 @@
  *   - receives and logs HELLO / REQUEST / BYE messages from camps
  *   - stops on SIGINT, SIGTERM or a SHUTDOWN message: SIGTERM all camps, wait up to
  *     2 s, SIGKILL stragglers, reap everything, then remove the queue and pid file
- * The triage scheduler, deadlock control, allocators etc. arrive in later phases.
+ *   - hands RESCUE requests to the live scheduler (dispatch.c) and kit requests to the
+ *     loading dock (dock.c: warehouse producers -> bounded buffer -> trucks), which updates
+ *     the inventory (inventory.c, readers-writers)
+ * Deadlock control, allocators etc. arrive in later phases.
  */
 #include "camps.h"
 #include "dispatch.h"
+#include "dock.h"
+#include "inventory.h"
 #include "log.h"
 #include "relief.h"
 #include "shm.h"
@@ -38,6 +43,10 @@
 #define DEFAULT_TEAMS        3
 #define DEFAULT_QUANTUM      10      /* simulated minutes, RR */
 #define DEFAULT_AGE          60      /* simulated minutes, MLFQ aging */
+#define DEFAULT_DOCK         8       /* loading dock slots */
+#define DEFAULT_PRODUCERS    2       /* warehouse producer threads */
+#define DEFAULT_TRUCKS       4       /* truck consumer threads */
+#define DEFAULT_RW           "rwlock"
 
 static volatile sig_atomic_t g_stop = 0;     /* signal number that requested shutdown */
 static volatile sig_atomic_t g_child = 0;    /* SIGCHLD seen: reap in the main loop */
@@ -144,6 +153,7 @@ typedef struct {
     unsigned long counts[MSG_SHUTDOWN + 1];
     relief_shm_t *shm;      /* live status table (total_requests) */
     dispatcher_t *disp;     /* live scheduler: RESCUE requests go here */
+    dock_t       *dock;     /* loading dock: kit requests go here */
 } stats_t;
 
 /* Lock the status table. Every reliefd lock site goes through here, so a robust-mutex
@@ -173,16 +183,20 @@ static int handle_message(const relief_msg_t *m, camp_table_t *camps, stats_t *s
         EV_INFO("bye", "camp=%u camp_pid=%d", m->camp_id, m->camp_pid);
         return 0;
     case MSG_REQUEST: {
-        /* Only RESCUE requests are CPU-scheduled jobs (teams = CPUs). Kit and vehicle requests
-         * are logged only: allocation and devices are Phase 3/4. */
+        /* RESCUE requests are CPU-scheduled jobs (teams = CPUs); kit requests go to the
+         * loading dock. Vehicle requests (TRUCK, BOAT) are logged only: devices come later. */
         int sched = r->resource == RES_RESCUE && st->disp != NULL;
+        int dock = dock_handles(r->resource) && st->dock != NULL;
         EV_INFO("request", "id=%u camp=%u camp_pid=%d severity=%s resource=%s qty=%u service=%u "
-                "arrival=%u alert=%d orig_severity=%s sched=%d",
+                "arrival=%u alert=%d orig_severity=%s sched=%d dock=%d",
                 r->id, r->camp_id, r->camp_pid, relief_severity_name(r->severity),
                 relief_resource_name(r->resource), r->quantity, r->service_time, r->arrival,
-                (r->flags & REQ_FLAG_ALERT) ? 1 : 0, relief_severity_name(r->orig_severity), sched);
+                (r->flags & REQ_FLAG_ALERT) ? 1 : 0, relief_severity_name(r->orig_severity), sched,
+                dock);
         if (sched)
             dispatch_submit(st->disp, r);
+        if (dock && dock_submit(st->dock, r) == -1)
+            EV_WARN("dock_submit_failed", "id=%u reason=ENOMEM", r->id);
         if (st->shm && status_lock(st->shm) != -1) {
             st->shm->data.total_requests++;
             relief_shm_end_write(st->shm);
@@ -227,7 +241,7 @@ static void usage(const char *prog)
     fprintf(stderr,
             "usage: %s [--camps FILE] [--scenario FILE] [--seed N] [--time-scale MS] [--exit-when-done]\n"
             "          [--policy NAME] [--teams N] [--quantum Q] [--age MIN] [--preemptive on|off]\n"
-            "          [--camp-bin PATH]\n"
+            "          [--dock N] [--producers P] [--trucks C] [--rw semaphore|rwlock] [--camp-bin PATH]\n"
             "  --camps     camps config, one \"<id> <name>\" per line (default %s)\n"
             "  --scenario  scenario CSV passed to every camp (default %s)\n"
             "  --seed      seed passed to every camp (default 1)\n"
@@ -238,9 +252,16 @@ static void usage(const char *prog)
             "  --quantum   RR quantum in simulated minutes (default %d)\n"
             "  --age       MLFQ aging threshold in simulated minutes (default %d)\n"
             "  --preemptive on|off  prio preemption (default off)\n"
+            "  --dock      loading-dock capacity in packages, 1-%d (default %d)\n"
+            "  --producers warehouse producer threads, 1-%d (default %d)\n"
+            "  --trucks    truck consumer threads, 1-%d (default %d)\n"
+            "  --rw        inventory readers-writers lock: semaphore (readers preference) or\n"
+            "              rwlock (writer preference) (default %s)\n"
             "  --camp-bin  camp executable (default: camp next to reliefd)\n",
             prog, DEFAULT_CAMPS_CONF, DEFAULT_SCENARIO, DEFAULT_TIME_SCALE, DEFAULT_POLICY,
-            RELIEF_SHM_TEAMS, DEFAULT_TEAMS, DEFAULT_QUANTUM, DEFAULT_AGE);
+            RELIEF_SHM_TEAMS, DEFAULT_TEAMS, DEFAULT_QUANTUM, DEFAULT_AGE, DOCK_MAX_CAPACITY,
+            DEFAULT_DOCK, DOCK_MAX_PRODUCERS, DEFAULT_PRODUCERS, DOCK_MAX_TRUCKS, DEFAULT_TRUCKS,
+            DEFAULT_RW);
 }
 
 int main(int argc, char **argv)
@@ -257,6 +278,10 @@ int main(int argc, char **argv)
         { "age",      required_argument, NULL, 'a' },
         { "preemptive", required_argument, NULL, 'e' },
         { "camp-bin", required_argument, NULL, 'b' },
+        { "dock",     required_argument, NULL, 'D' },
+        { "producers", required_argument, NULL, 'P' },
+        { "trucks",   required_argument, NULL, 'C' },
+        { "rw",       required_argument, NULL, 'w' },
         { "help",     no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
@@ -266,7 +291,10 @@ int main(int argc, char **argv)
     const char *camp_bin = NULL;
     const char *home = getenv("RELIEF_HOME");
     char pidpath[CAMPS_PATH_MAX], logdir[CAMPS_PATH_MAX], logpath[CAMPS_PATH_MAX];
-    stats_t st = { { 0 }, NULL, NULL };
+    stats_t st = { { 0 }, NULL, NULL, NULL };
+    dock_config_t kcfg = { DEFAULT_DOCK, DEFAULT_PRODUCERS, DEFAULT_TRUCKS, 0, NULL };
+    const char *rw_kind = DEFAULT_RW;
+    inventory_t *inv = NULL;
     dispatch_config_t dcfg = { DEFAULT_POLICY, DEFAULT_TEAMS, DEFAULT_QUANTUM, -1, DEFAULT_AGE, 0, NULL };
     struct mq_attr attr;
     long other_pid = 0;
@@ -277,7 +305,7 @@ int main(int argc, char **argv)
     camps.seed = 1;
     camps.time_scale_ms = DEFAULT_TIME_SCALE;
 
-    while ((opt = getopt_long(argc, argv, "c:s:S:t:xp:n:q:a:e:b:h", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:s:S:t:xp:n:q:a:e:b:D:P:C:w:h", opts, NULL)) != -1) {
         char *end;
         switch (opt) {
         case 'c': camps_conf = optarg; break;
@@ -325,6 +353,31 @@ int main(int argc, char **argv)
                 fprintf(stderr, "invalid --preemptive (on or off): %s\n", optarg);
                 return 2;
             }
+            break;
+        case 'D': case 'P': case 'C': {
+            unsigned long v, max = opt == 'D' ? DOCK_MAX_CAPACITY
+                                 : opt == 'P' ? DOCK_MAX_PRODUCERS : DOCK_MAX_TRUCKS;
+            errno = 0;
+            v = strtoul(optarg, &end, 10);
+            if (errno || end == optarg || *end || v < 1 || v > max) {
+                fprintf(stderr, "invalid --%s (1-%lu): %s\n",
+                        opt == 'D' ? "dock" : opt == 'P' ? "producers" : "trucks", max, optarg);
+                return 2;
+            }
+            if (opt == 'D')
+                kcfg.capacity = (int)v;
+            else if (opt == 'P')
+                kcfg.producers = (int)v;
+            else
+                kcfg.trucks = (int)v;
+            break;
+        }
+        case 'w':
+            if (strcmp(optarg, "semaphore") && strcmp(optarg, "rwlock")) {
+                fprintf(stderr, "invalid --rw (semaphore or rwlock): %s\n", optarg);
+                return 2;
+            }
+            rw_kind = optarg;
             break;
         case 'h': usage(argv[0]); return 0;
         default:  usage(argv[0]); return 2;
@@ -424,13 +477,23 @@ int main(int argc, char **argv)
     dcfg.time_scale_ms = camps.time_scale_ms;
     dcfg.shm = st.shm;
     st.disp = dispatch_start(&dcfg);
-    if (!st.disp) {
+    inv = st.disp ? inventory_new(rw_kind) : NULL;
+    if (inv) {
+        kcfg.time_scale_ms = camps.time_scale_ms;
+        kcfg.inv = inv;
+        st.dock = dock_start(&kcfg);
+    }
+    if (!st.dock) {
+        dispatch_stop(st.disp);
+        inventory_free(inv);
         unlink(pidpath);
         relief_shm_destroy(st.shm);
         mq_close(mq);
         mq_unlink(RELIEF_MQ_NAME);
         goto fail_log;
     }
+    dock_publish(st.dock, st.shm);
+    inventory_publish(inv, st.shm);
     camps_spawn_all(&camps);
     camps_publish_shm(&camps, st.shm);
     camps_save(&camps);
@@ -440,6 +503,10 @@ int main(int argc, char **argv)
     while (!g_stop) {
         int r;
 
+        /* Dock counters and inventory (a reader) first: keep the window between the g_child
+         * check below and mq_timedreceive as short as possible. */
+        dock_publish(st.dock, st.shm);
+        inventory_publish(inv, st.shm);
         if (g_child) {
             g_child = 0;            /* clear before reaping so no SIGCHLD is lost */
             camps_reap(&camps, 0);
@@ -484,9 +551,13 @@ int main(int argc, char **argv)
     while (receive_one(mq, 0, &camps, &st) == RECV_MSG)
         ;
 
-    /* Stop the rescue teams (unfinished requests are logged as abandoned) and join them. */
+    /* Stop the rescue teams (unfinished requests are logged as abandoned) and join them,
+     * then the dock (pending orders abandoned, trucks stopped with poison pills). */
     dispatch_stop(st.disp);
     st.disp = NULL;
+    dock_stop(st.dock);
+    st.dock = NULL;
+    inventory_free(inv);
 
     for (size_t i = 0; i < camps.n; i++)
         EV_INFO("camp_final", "camp=%u name=%s state=%s restarts=%u", camps.camps[i].id,

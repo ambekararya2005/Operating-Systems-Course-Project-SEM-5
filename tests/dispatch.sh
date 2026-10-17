@@ -98,7 +98,7 @@ rescues=$(awk -F, 'NR > 1 && $4 == "RESCUE"' "$ROOT/scenarios/flood_pune.csv" | 
     || fail "a non-RESCUE request was scheduled"
 [[ $(count ' event=dispatch ') -eq $sched && $(count ' event=complete ') -eq $sched ]] \
     || fail "each scheduled request should be dispatched and completed exactly once"
-diff <(sed -n 's/.* event=request id=\([0-9]*\) .* sched=1$/\1/p' "$LOG") \
+diff <(sed -n 's/.* event=request id=\([0-9]*\) .* sched=1 .*$/\1/p' "$LOG") \
      <(sed -n 's/.* event=dispatch team=[0-9]* id=\([0-9]*\) .*/\1/p' "$LOG") >/dev/null \
     || fail "FCFS should dispatch requests in arrival order"
 [[ $(count ' event=preempt ') -eq 0 ]] || fail "FCFS must never preempt"

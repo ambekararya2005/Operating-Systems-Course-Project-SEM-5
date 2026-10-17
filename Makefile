@@ -1,11 +1,13 @@
 # ReliefOS build. Binaries go to $(BUILD)/ (default build/).
-#   make            build reliefd, camp, reliefstat, schedsim, linuxsched, racelab (+ test helpers)
+#   make            build reliefd, camp, reliefstat, schedsim, linuxsched, racelab, rwlab (+ test helpers)
 #   make test       tests/{smoke,camps,traffic,signals,status,cli}.sh + phase1_smoke.sh (gate M1)
 #                   + tests/sched.sh (build/test_sched unit tests, schedsim)
 #                   + tests/dispatch.sh (reliefd rescue-team threads, live scheduling)
 #                   + tests/linuxsched.sh (real Linux scheduling classes, watchdog)
 #                   + tests/phase2_check.sh (gate M2: every policy consistent and deterministic)
 #                   + tests/racelab.sh (critical section: Peterson, mutex, spinlock, semaphore)
+#                   + tests/sync.sh (test_sync: dock bounded buffer, rwsync; rwlab) and tests/dock.sh
+#                     (reliefd loading dock: produce/consume/deliver, occupancy, report)
 #   make tsan       ThreadSanitizer build in build/tsan/ + tests
 #   make valgrind   tests with reliefd and camps under valgrind
 #   make run        run reliefd in the foreground (RELIEF_HOME=./run)
@@ -17,6 +19,8 @@
 #   make e4         experiment E4: critical-section protection, every racelab mode x 10 runs ->
 #                   experiments/results/e4.csv + PNGs (copied to docs/figures/e4/), and the
 #                   strace futex counts in docs/strace_futex.txt
+#   make e5         experiment E5: readers-writers starvation, rwlab semaphore vs rwlock x 5 runs ->
+#                   experiments/results/e5.csv + summary table
 
 CC       ?= gcc
 BUILD    ?= build
@@ -29,10 +33,11 @@ LDFLAGS  := -pthread $(SANFLAGS)
 LDLIBS   := -lrt -lm
 
 OBJ        := $(BUILD)/obj
-COMMON_SRC := src/common/log.c src/common/shm.c
+COMMON_SRC := src/common/log.c src/common/shm.c src/common/rwsync.c
 SCHED_POLICY_SRC := src/sched/sched.c src/sched/fcfs.c src/sched/sjf.c src/sched/srtf.c \
                     src/sched/rr.c src/sched/prio.c src/sched/mlfq.c
-RELIEFD_SRC := src/reliefd/main.c src/reliefd/camps.c src/reliefd/dispatch.c $(COMMON_SRC) \
+RELIEFD_SRC := src/reliefd/main.c src/reliefd/camps.c src/reliefd/dispatch.c src/reliefd/dock.c \
+               src/reliefd/inventory.c $(COMMON_SRC) \
                $(SCHED_POLICY_SRC)
 CAMP_SRC    := src/camp/main.c $(COMMON_SRC)
 RELIEFSTAT_SRC := src/reliefstat/main.c src/common/shm.c
@@ -48,6 +53,11 @@ LINUXSCHED_SRC := src/linuxsched/main.c $(SCHED_SRC)
 LINUXSCHED_OBJ := $(LINUXSCHED_SRC:%.c=$(OBJ)/%.o)
 RACELAB_SRC := src/racelab/main.c
 RACELAB_OBJ := $(RACELAB_SRC:%.c=$(OBJ)/%.o)
+RWLAB_SRC := src/rwlab/main.c src/common/rwsync.c
+RWLAB_OBJ := $(RWLAB_SRC:%.c=$(OBJ)/%.o)
+# Unit tests of the Phase 3 sync code: the loading dock's bounded buffer and both rwsync kinds.
+TEST_SYNC_SRC := tests/test_sync.c src/reliefd/dock.c src/reliefd/inventory.c $(COMMON_SRC)
+TEST_SYNC_OBJ := $(TEST_SYNC_SRC:%.c=$(OBJ)/%.o)
 TEST_SCHED_SRC := tests/test_sched.c $(SCHED_SRC)
 TEST_SCHED_OBJ := $(TEST_SCHED_SRC:%.c=$(OBJ)/%.o)
 # Test helpers (built with the programs, used by tests/*.sh).
@@ -56,7 +66,7 @@ SHM_DIE_OBJ := $(SHM_DIE_SRC:%.c=$(OBJ)/%.o)
 
 TESTS := tests/smoke.sh tests/camps.sh tests/traffic.sh tests/signals.sh tests/status.sh tests/cli.sh \
          tests/phase1_smoke.sh tests/sched.sh tests/dispatch.sh tests/linuxsched.sh tests/phase2_check.sh \
-         tests/racelab.sh
+         tests/racelab.sh tests/sync.sh tests/dock.sh
 
 # --trace-children: camps exec'd by reliefd also run under valgrind.
 VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
@@ -66,9 +76,10 @@ VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
 # $(call run_tests,ENV...) runs every test script with the given environment.
 run_tests = for t in $(TESTS); do echo "== $$t"; $(1) $$t || exit 1; done
 
-.PHONY: all reliefd camp reliefstat schedsim linuxsched racelab clean run test tsan valgrind e1 e2 e4
+.PHONY: all reliefd camp reliefstat schedsim linuxsched racelab rwlab clean run test tsan valgrind e1 e2 e4 e5
 
-all: reliefd camp reliefstat schedsim linuxsched racelab $(BUILD)/shm_die_locked $(BUILD)/test_sched
+all: reliefd camp reliefstat schedsim linuxsched racelab rwlab $(BUILD)/shm_die_locked $(BUILD)/test_sched \
+     $(BUILD)/test_sync
 
 reliefd: $(BUILD)/reliefd
 camp: $(BUILD)/camp
@@ -76,6 +87,7 @@ reliefstat: $(BUILD)/reliefstat
 schedsim: $(BUILD)/schedsim
 linuxsched: $(BUILD)/linuxsched
 racelab: $(BUILD)/racelab
+rwlab: $(BUILD)/rwlab
 
 $(BUILD)/reliefd: $(RELIEFD_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
@@ -96,6 +108,12 @@ $(BUILD)/linuxsched: $(LINUXSCHED_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/racelab: $(RACELAB_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/rwlab: $(RWLAB_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/test_sync: $(TEST_SYNC_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/test_sched: $(TEST_SCHED_OBJ)
@@ -145,9 +163,13 @@ e4: racelab
 	@mkdir -p docs/figures/e4
 	cp $(addprefix experiments/results/,$(E4_FIGS)) docs/figures/e4/
 
+# Experiment E5 (real threads; a table, no plot).
+e5: rwlab
+	experiments/run_e5.sh
+
 clean:
 	rm -rf build
 
 -include $(RELIEFD_OBJ:.o=.d) $(CAMP_OBJ:.o=.d) $(RELIEFSTAT_OBJ:.o=.d) $(SHM_DIE_OBJ:.o=.d) \
          $(SCHEDSIM_OBJ:.o=.d) $(TEST_SCHED_OBJ:.o=.d) $(LINUXSCHED_OBJ:.o=.d) \
-         $(RACELAB_OBJ:.o=.d)
+         $(RACELAB_OBJ:.o=.d) $(RWLAB_OBJ:.o=.d) $(TEST_SYNC_OBJ:.o=.d)

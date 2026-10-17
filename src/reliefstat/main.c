@@ -3,7 +3,8 @@
  *             lock-free consistent reads with a seqlock — Unit 3
  *
  * reliefstat: print reliefd's live status table.
- *   reliefstat          human-readable tables: camps, then the live scheduler
+ *   reliefstat          human-readable tables: camps, the live scheduler, the loading dock
+ *                       and the inventory
  *   reliefstat --sched  only the scheduler: policy, ready queue per level, each team's work
  *   reliefstat --json   one JSON object (for scripts and later UIs); with --sched, only the
  *                       scheduler object
@@ -85,6 +86,44 @@ static void print_sched_json(const relief_status_t *st, int64_t now)
     printf("]}");
 }
 
+static const char *const g_kits[RELIEF_KIT_KINDS] = { "FOOD_KIT", "MED_KIT", "HYGIENE_KIT" };
+
+static void print_dock_json(const relief_status_t *st)
+{
+    printf("{\"capacity\":%u,\"occupancy\":%u,\"max_occupancy\":%u,\"producers\":%u,\"trucks\":%u,"
+           "\"orders\":%llu,\"produced\":%llu,\"consumed\":%llu,\"delivered\":%llu,"
+           "\"blocked_puts\":%llu,\"blocked_min\":%.1f,\"inventory_lock\":",
+           st->dock_capacity, st->dock_occupancy, st->dock_max_occupancy, st->dock_producers,
+           st->dock_trucks, (unsigned long long)st->dock_orders, (unsigned long long)st->dock_produced,
+           (unsigned long long)st->dock_consumed, (unsigned long long)st->dock_delivered,
+           (unsigned long long)st->dock_blocked_puts, st->dock_blocked_min);
+    print_json_string(st->inv_lock);
+    printf(",\"inventory\":[");
+    for (int w = 0; w < RELIEF_WAREHOUSES; w++) {
+        printf("%s{\"warehouse\":%d", w ? "," : "", w + 1);
+        for (int k = 0; k < RELIEF_KIT_KINDS; k++)
+            printf(",\"%s\":%lld", g_kits[k], (long long)st->inventory[w][k]);
+        printf("}");
+    }
+    printf("]}");
+}
+
+static void print_dock_table(const relief_status_t *st)
+{
+    printf("loading dock: %u/%u packages (max %u), %u producers, %u trucks; orders %llu, produced %llu, "
+           "consumed %llu, delivered %llu\n",
+           st->dock_occupancy, st->dock_capacity, st->dock_max_occupancy, st->dock_producers,
+           st->dock_trucks, (unsigned long long)st->dock_orders, (unsigned long long)st->dock_produced,
+           (unsigned long long)st->dock_consumed, (unsigned long long)st->dock_delivered);
+    printf("  producers blocked on a full dock: %llu puts, %.1f simulated min\n",
+           (unsigned long long)st->dock_blocked_puts, st->dock_blocked_min);
+    printf("inventory (lock: %s)\n  %-9s %9s %9s %12s\n", st->inv_lock[0] ? st->inv_lock : "-",
+           "WAREHOUSE", g_kits[0], g_kits[1], g_kits[2]);
+    for (int w = 0; w < RELIEF_WAREHOUSES; w++)
+        printf("  %-9d %9lld %9lld %12lld\n", w + 1, (long long)st->inventory[w][0],
+               (long long)st->inventory[w][1], (long long)st->inventory[w][2]);
+}
+
 static void print_json(const relief_status_t *st, int running, int64_t now)
 {
     printf("{\"running\":%s,\"daemon_pid\":%d,\"start_time_ms\":%lld,\"uptime_ms\":%lld,"
@@ -104,6 +143,8 @@ static void print_json(const relief_status_t *st, int running, int64_t now)
     }
     printf("],\"scheduler\":");
     print_sched_json(st, now);
+    printf(",\"dock\":");
+    print_dock_json(st);
     printf("}\n");
 }
 
@@ -230,6 +271,8 @@ int main(int argc, char **argv)
         print_table(&st, running, now);
         printf("\n");
         print_sched_table(&st, now);
+        printf("\n");
+        print_dock_table(&st);
     }
     return running ? 0 : 1;
 }

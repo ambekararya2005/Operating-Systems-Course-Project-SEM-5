@@ -124,12 +124,14 @@ static inline int relief_resource_parse(const char *s)
  */
 #define RELIEF_SHM_NAME      "/reliefos_status"
 #define RELIEF_SHM_MAGIC     0x534c4552u     /* "RELS" */
-#define RELIEF_SHM_VERSION   2
+#define RELIEF_SHM_VERSION   3
 #define RELIEF_SHM_CAMPS     64
 #define RELIEF_CAMP_NAME_MAX 32
 #define RELIEF_SHM_TEAMS     16     /* max rescue team threads (reliefd --teams) */
 #define RELIEF_SHM_LEVELS    3      /* ready-queue levels shown (MLFQ Q0..Q2, prio severities) */
 #define RELIEF_POLICY_MAX    32
+#define RELIEF_WAREHOUSES    2      /* inventory: camp c is served by warehouse (c - 1) % 2 */
+#define RELIEF_KIT_KINDS     3      /* FOOD_KIT, MED_KIT, HYGIENE_KIT, in that order */
 
 /* Camp lifecycle state, owned by reliefd. */
 typedef enum {
@@ -182,6 +184,15 @@ typedef struct {
     uint64_t queue_len[RELIEF_SHM_LEVELS];  /* ready requests per level, highest first */
     uint64_t sched_enqueued, sched_completed, sched_preemptions, sched_promotions;
     relief_shm_team_t teams[RELIEF_SHM_TEAMS];
+    /* Loading dock: kit packages, warehouse producers -> trucks (Phase 3, bounded buffer) */
+    uint32_t dock_capacity, dock_occupancy, dock_max_occupancy, dock_producers, dock_trucks;
+    uint32_t _pad2;
+    uint64_t dock_orders, dock_produced, dock_consumed, dock_delivered;
+    uint64_t dock_blocked_puts;             /* puts that found the dock full */
+    double   dock_blocked_min;              /* simulated minutes producers spent blocked on it */
+    /* Inventory (Phase 3, readers-writers): stock per warehouse and kit type */
+    char     inv_lock[16];                  /* readers-writers implementation: semaphore|rwlock */
+    int64_t  inventory[RELIEF_WAREHOUSES][RELIEF_KIT_KINDS];
 } relief_status_t;
 
 typedef struct {

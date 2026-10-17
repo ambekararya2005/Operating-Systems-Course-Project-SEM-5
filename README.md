@@ -41,7 +41,8 @@ make test            # tests/sched.sh (textbook FCFS/SJF/SRTF/RR/prio/MLFQ unit 
                      # tests/status.sh (shared-memory status table, robust mutex recovery),
                      # tests/cli.sh (reliefctl ps/tree/report/simulate, stockcheck.sh),
                      # tests/dispatch.sh (live rescue-team threads: dispatch, preemption, aging),
-                     # tests/racelab.sh (critical section: Peterson, mutex, spinlock, semaphore)
+                     # tests/racelab.sh (critical section: Peterson, mutex, spinlock, semaphore),
+                     # tests/sync.sh (bounded buffer, readers-writers, rwlab), tests/dock.sh (loading dock)
 make tsan            # ThreadSanitizer build (build/tsan/) + tests
 make valgrind        # tests under valgrind (camps too)
 make e1              # experiment E1: 9 variants x 5 seeds + E1b load sweep -> experiments/results/e1*.csv + graphs
@@ -49,6 +50,7 @@ make e2              # experiment E2: real threads under CFS/EEVDF+nice, SCHED_F
                      #   (fifo/rr first: sudo setcap cap_sys_nice+ep build/linuxsched)
 make e4              # experiment E4: every racelab mode x 10 runs -> experiments/results/e4.csv + graphs,
                      #   plus strace futex counts in docs/strace_futex.txt (sudo apt install strace)
+make e5              # experiment E5: readers-writers writer starvation, rwlab semaphore vs rwlock
 make clean
 ```
 
@@ -124,6 +126,21 @@ strace -f -e trace=futex -c build/racelab --mode mutex   # futex calls only unde
 ```
 Results and the explanation are in E4 in `docs/EXPERIMENTS.md`.
 
+### Loading dock and inventory (producer-consumer, readers-writers)
+Kit requests (FOOD_KIT, MED_KIT, HYGIENE_KIT) become orders. Warehouse producer threads take the kits from
+the inventory, pack them and put each package on a bounded loading dock (a circular buffer guarded by the
+`empty`, `full` and `mutex` semaphores). Truck threads take packages off and deliver them. The inventory is a
+readers-writers structure behind one interface: the textbook semaphore solution (readers preference) or a
+writer-preference `pthread_rwlock`.
+```sh
+build/reliefd --dock 8 --producers 2 --trucks 4 --rw rwlock ...   # the defaults
+scripts/reliefctl status        # dock occupancy, produced/consumed/delivered, inventory per warehouse
+scripts/reliefctl report        # average dock occupancy, time producers were blocked on a full dock
+build/rwlab --rw semaphore      # 8 readers + 1 writer: the writer starves (0 writes in 2 s)
+build/rwlab --rw rwlock         # writer preference: ~900 writes, max writer wait ~0.2 ms
+```
+`RELIEF_DOCK_ARGS="--dock 4 --rw semaphore" scripts/reliefctl start` passes dock options through reliefctl.
+
 ### Scenarios
 `scenarios/flood_pune.csv` holds 200 requests across the 8 camps: 15% CRITICAL, 35% URGENT and 50% ROUTINE,
 with arrivals over 6 simulated hours and a peak in the middle. It is generated, and the same seed gives a
@@ -174,7 +191,8 @@ run it every 10 minutes, add this with `crontab -e`:
 | 2 | Traditional/modern UNIX scheduling: nice, SCHED_FIFO/SCHED_RR, CFS/EEVDF | `build/linuxsched`: real threads on one pinned CPU, experiment E2 | 2 |
 | 2, 3 | Threads (pthreads), mutex + condition variable | reliefd's rescue-team threads and clock thread share one ready queue (`src/reliefd/dispatch.c`) | 2 |
 | 3 | Critical section, Peterson's solution, mutex, TAS spinlock, semaphores, futex | `build/racelab`: two camps / one boat / one counter, experiment E4, strace of futex | 3 |
-| 3 | Producer-consumer, readers-writers | Warehouse → truck, inventory | 3 |
+| 3 | Producer-consumer (bounded buffer, empty/full/mutex semaphores) | reliefd loading dock: warehouse producer threads → dock → truck threads (`src/reliefd/dock.c`) | 3 |
+| 3 | Readers-writers (readers preference vs writer preference) | Inventory behind `rwsync` (semaphore or pthread rwlock); `build/rwlab`, experiment E5 | 3 |
 | 3 | Banker's, wait-for-graph detection + recovery, resource ordering | Deadlock control over trucks/boats | 3 |
 | 4 | First/best/worst fit, buddy system, slab allocator | Warehouse space, pre-packed relief kits | 4 |
 | 4 | FIFO/LRU/Optimal replacement, thrashing | Perishable stock (plus expiry-first) | 4 |
