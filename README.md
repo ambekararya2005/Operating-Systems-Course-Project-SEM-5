@@ -43,7 +43,7 @@ make test            # tests/sched.sh (textbook FCFS/SJF/SRTF/RR/prio/MLFQ unit 
                      # tests/dispatch.sh (live rescue-team threads: dispatch, preemption, aging)
 make tsan            # ThreadSanitizer build (build/tsan/) + tests
 make valgrind        # tests under valgrind (camps too)
-make e1              # experiment E1: 8 scheduling variants x 5 seeds -> experiments/results/e1.csv + graphs
+make e1              # experiment E1: 9 variants x 5 seeds + E1b load sweep -> experiments/results/e1*.csv + graphs
 make e2              # experiment E2: real threads under CFS/EEVDF+nice, SCHED_FIFO, SCHED_RR vs simulated
                      #   (fifo/rr first: sudo setcap cap_sys_nice+ep build/linuxsched)
 make clean
@@ -94,8 +94,9 @@ It reports the average waiting, turnaround and response time (overall and per se
 wait, throughput, team utilisation, context switches and starved requests (wait > `--starve`, default
 120 min). `--gantt` draws the first 60 minutes per team, and `--csv` writes one row per request.
 Policies: `fcfs`, `sjf`, `srtf`, `rr` (`--quantum`, default 10), `prio` (by severity, `--preemptive on|off`)
-and `mlfq` (3 queues, quanta 8/16/FCFS, aging after `--age` minutes, default 60; every promotion is logged on
-stderr). `build/test_sched` prints a textbook Gantt chart for each unit test.
+`mlfq` (3 queues, quanta 8/16/FCFS, aging after `--age` minutes, default 60; every promotion is logged on
+stderr) and `mlfq-floor` (CRITICAL never demoted below Q1, or `--crit-floor Q`). `--trace F` writes every
+scheduling event; `experiments/analyze_mlfq_trace.py F` checks the MLFQ rules and splits waits by queue level. `build/test_sched` prints a textbook Gantt chart for each unit test.
 
 On the flood scenario with 3 teams (`schedsim --policy P --teams 3`):
 

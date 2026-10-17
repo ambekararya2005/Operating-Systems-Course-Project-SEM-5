@@ -56,6 +56,8 @@ typedef struct {
     uint64_t seed;
     int      preemptive;    /* prio: 1 on, 0 off, -1 policy default (off) */
     int64_t  age;           /* mlfq: promote a job that waited longer than this (minutes) */
+    int      crit_floor;    /* mlfq-floor: deepest queue for CRITICAL jobs, as level + 1
+                             * (1 = Q0, 2 = Q1, 3 = Q2); 0 = default (Q1). Ignored by mlfq. */
     sched_event_fn on_event;    /* optional: promotions / demotions */
     void          *event_ctx;
 } sched_params_t;
@@ -142,5 +144,6 @@ sched_policy_t *sched_srtf_new(void);
 sched_policy_t *sched_rr_new(void);
 sched_policy_t *sched_prio_new(void);
 sched_policy_t *sched_mlfq_new(void);
+sched_policy_t *sched_mlfq_floor_new(void);
 
 #endif /* RELIEF_SCHED_H */

@@ -5,6 +5,15 @@
 # rush hour (arrivals 10x denser in minutes 60-120) and run every policy variant through
 # build/schedsim on 3 teams. One CSV row per (variant, seed) goes to experiments/results/e1.csv.
 #
+# E1b: load sweep. The same 500 requests per seed (identical service times: the generator draws
+# the same random numbers per request whatever the duration) are spread over a duration chosen
+# so the offered load (total work / (teams x duration)) is 30, 45, 60, 75, 90 and 105%. E1b uses
+# the generator's default arrival profile (rate 3x higher in the middle third), not E1's rush
+# hour: a 10x rush hour overloads the teams at every average load, so MLFQ starves requests
+# even at 30% (7 on average; see docs/EXPERIMENTS.md) and there is no threshold to find.
+# prio-preempt, mlfq and mlfq-floor run at each load; rows go to experiments/results/e1b.csv
+# with target_load and offered_load columns in front.
+#
 #   usage: run_e1.sh [-s "1 2 3 4 5"] [-d DURATION] [-n TEAMS]
 #     -s  seeds (default "1 2 3 4 5"); the seed drives both the scenario and schedsim's
 #         same-minute tie order, so each seed is a different but reproducible workload
@@ -52,6 +61,7 @@ VARIANTS=(
     "prio|--policy prio --preemptive off"
     "prio-preempt|--policy prio --preemptive on"
     "mlfq|--policy mlfq --age 60"
+    "mlfq-floor|--policy mlfq-floor --age 60"
 )
 
 mkdir -p "$RESULTS"
@@ -86,3 +96,61 @@ awk -F, 'NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
     }' "$OUT"
 echo
 echo "wrote $OUT ($(($(wc -l < "$OUT") - 1)) runs)"
+
+# ---- E1b: load sweep --------------------------------------------------------------------
+LOADS="30 45 60 75 90 105"
+SWEEP=(
+    "prio-preempt|--policy prio --preemptive on"
+    "mlfq|--policy mlfq --age 60"
+    "mlfq-floor|--policy mlfq-floor --age 60"
+)
+OUTB="$RESULTS/e1b.csv"
+rm -f "$OUTB"
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/reliefos-e1b.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT
+echo
+echo "E1b: load sweep at $LOADS % offered load, $ROWS requests, default arrival profile, $teams teams, seeds: $seeds"
+for seed in $seeds; do
+    # Total work of this seed's requests (independent of the duration).
+    python3 -I "$ROOT/experiments/gen_scenario.py" --rows "$ROWS" --seed "$seed" --duration 3000 \
+        -o "$TMP/base.csv"
+    work=$(awk -F, 'NR > 1 { w += $6 } END { print w }' "$TMP/base.csv")
+    for load in $LOADS; do
+        dur=$(( (work * 100 + teams * load / 2) / (teams * load) ))
+        scenario="$TMP/l${load}_s${seed}.csv"
+        python3 -I "$ROOT/experiments/gen_scenario.py" --rows "$ROWS" --seed "$seed" --duration "$dur" \
+            -o "$scenario"
+        w2=$(awk -F, 'NR > 1 { w += $6 } END { print w }' "$scenario")
+        [[ "$w2" == "$work" ]] || { echo "$PROG: work changed with duration ($w2 vs $work)" >&2; exit 1; }
+        offered=$(awk -v w="$work" -v t="$teams" -v d="$dur" 'BEGIN { printf "%.1f", 100 * w / (t * d) }')
+        for v in "${SWEEP[@]}"; do
+            label=${v%%|*}
+            read -r -a opts <<< "${v#*|}"
+            rm -f "$TMP/row.csv"
+            "$BIN/schedsim" "${opts[@]}" --scenario "$scenario" --teams "$teams" --seed "$seed" \
+                --summary-csv "$TMP/row.csv" --label "$label" > /dev/null 2>&1 \
+                || { echo "$PROG: schedsim failed for $label load $load seed $seed" >&2; exit 1; }
+            [[ -s "$OUTB" ]] || sed -n '1s/^/target_load,offered_load,/p' "$TMP/row.csv" > "$OUTB"
+            sed -n "2s/^/$load,$offered,/p" "$TMP/row.csv" >> "$OUTB"
+        done
+    done
+    echo "  seed $seed: ${#SWEEP[@]} variants x $(wc -w <<< "$LOADS") loads done"
+done
+
+awk -F, 'NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
+    { k = $col["target_load"] SUBSEP $col["label"]; n[k]++
+      st[k] += $col["starved"]; cr[k] += $col["critical_avg_response"]
+      if ($col["starved"] > mx[k]) mx[k] = $col["starved"]
+      if (!($col["target_load"] in seen)) { seen[$col["target_load"]] = 1; loads[++nl] = $col["target_load"] }
+      if (!($col["label"] in seenl)) { seenl[$col["label"]] = 1; labels[++nv] = $col["label"] } }
+    END {
+        printf "\n%-6s", "load"
+        for (v = 1; v <= nv; v++) printf " %24s", labels[v] " starved/resp"
+        printf "   (mean over seeds; starved max in brackets)\n"
+        for (i = 1; i <= nl; i++) { L = loads[i]; printf "%4s%% ", L
+            for (v = 1; v <= nv; v++) { k = L SUBSEP labels[v]
+                printf " %10.1f [%3d] / %6.1f", st[k] / n[k], mx[k], cr[k] / n[k] }
+            printf "\n" }
+    }' "$OUTB"
+echo
+echo "wrote $OUTB ($(($(wc -l < "$OUTB") - 1)) runs)"

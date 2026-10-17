@@ -121,6 +121,8 @@ int sim_run(sched_policy_t *p, sched_job_t *jobs, size_t n, const sim_config_t *
             sched_job_t *j = order[next++].job;
             j->ready_since = t;
             p->enqueue(p, j, t);
+            if (cfg->trace)
+                cfg->trace(cfg->trace_ctx, t, "arrive", j, -1);
             ready++;
         }
 
@@ -137,6 +139,8 @@ int sim_run(sched_policy_t *p, sched_job_t *jobs, size_t n, const sim_config_t *
                     j->ready_since = t;
                     p->enqueue(p, j, t);
                     ready++;
+                    if (cfg->trace)
+                        cfg->trace(cfg->trace_ctx, t, "preempt", j, i);
                 }
             }
         }
@@ -160,6 +164,8 @@ int sim_run(sched_policy_t *p, sched_job_t *jobs, size_t n, const sim_config_t *
             j->slice = 0;           /* a fresh quantum on every dispatch */
             j->team = i;
             running[i] = j;
+            if (cfg->trace)
+                cfg->trace(cfg->trace_ctx, t, "dispatch", j, i);
         }
 
         /* 4. run one minute */
@@ -181,6 +187,8 @@ int sim_run(sched_policy_t *p, sched_job_t *jobs, size_t n, const sim_config_t *
                 running[i] = NULL;
                 last_end[i] = t + 1;
                 done++;
+                if (cfg->trace)
+                    cfg->trace(cfg->trace_ctx, t + 1, "finish", j, i);
                 if (p->on_finish)
                     p->on_finish(p, j, t + 1);
             }

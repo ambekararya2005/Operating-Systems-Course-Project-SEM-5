@@ -20,10 +20,20 @@
  * Disaster relief: CRITICAL rescues start at the top and get teams quickly; long jobs
  * sink so they cannot monopolise every team; and a ROUTINE food request that has waited
  * an hour climbs up instead of waiting forever behind a stream of emergencies.
+ *
+ * Known effect (see docs/EXPERIMENTS.md, E1/E2): a LONG critical job is demoted Q0 -> Q1 after
+ * 8 minutes, and under load aging promotes it back to Q0 after 60 minutes, before Q1 ever
+ * serves it. It then ping-pongs between Q0 and Q1, getting only 8-minute slices. A long
+ * ROUTINE job instead runs to completion once Q2 (FCFS) starts it.
+ *
+ * Variant "mlfq-floor": CRITICAL jobs are never demoted below a floor level (default Q1).
+ * A critical job that uses its full quantum at the floor goes to the back of the same queue
+ * (round robin within the level) instead of dropping further.
  */
 #include "sched.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #define MLFQ_LEVELS 3
 
@@ -31,6 +41,7 @@ static const int64_t g_quantum[MLFQ_LEVELS] = { 8, 16, 0 };    /* 0 = FCFS, no q
 
 typedef struct {
     sched_fifo_t q[MLFQ_LEVELS];
+    int          crit_floor;    /* deepest level for a CRITICAL job (MLFQ_LEVELS - 1 = no floor) */
     int64_t      age;
     int64_t     *keys;
     size_t       max_keys;
@@ -48,6 +59,10 @@ static int mlfq_init(sched_policy_t *p, const sched_params_t *params)
     if (!s)
         return -1;
     s->age = params->age > 0 ? params->age : SCHED_DEFAULT_AGE;
+    s->crit_floor = MLFQ_LEVELS - 1;
+    if (strcmp(p->name, "mlfq-floor") == 0)
+        s->crit_floor = params->crit_floor >= 1 && params->crit_floor <= MLFQ_LEVELS
+                        ? params->crit_floor - 1 : 1;
     s->max_keys = 2 * (size_t)(params->teams > 0 ? params->teams : 1);
     s->keys = calloc(s->max_keys, sizeof *s->keys);
     if (!s->keys) {
@@ -112,11 +127,24 @@ static void mlfq_on_tick(sched_policy_t *p, int64_t now, sched_job_t *const *run
         if (!j || preempt[t])
             continue;
         l = j->queue_level;
-        if (l < MLFQ_LEVELS - 1 && j->slice >= g_quantum[l]) {
-            j->queue_level = l + 1;
-            preempt[t] = 1;
-            sched_emit(p, now, j, SCHED_EV_DEMOTE, l, l + 1);
+        if (l >= MLFQ_LEVELS - 1 || j->slice < g_quantum[l])
+            continue;
+        if (j->severity == 0 && l >= s->crit_floor) {
+            /* mlfq-floor: a CRITICAL job at its floor keeps its level; with others waiting
+             * at this level or above it rotates to the back of the queue (round robin),
+             * otherwise it simply starts a fresh quantum. */
+            int waiting = 0;
+            for (int k = 0; k <= l; k++)
+                waiting += s->q[k].len > 0;
+            if (waiting)
+                preempt[t] = 1;
+            else
+                j->slice = 0;
+            continue;
         }
+        j->queue_level = l + 1;
+        preempt[t] = 1;
+        sched_emit(p, now, j, SCHED_EV_DEMOTE, l, l + 1);
     }
 
     /* 2. Aging. Q1 first, so a job just promoted from Q2 is not promoted twice. */
@@ -145,6 +173,14 @@ static void mlfq_destroy(sched_policy_t *p)
         free(s->keys);
     free(s);
     p->state = NULL;
+}
+
+sched_policy_t *sched_mlfq_floor_new(void)
+{
+    sched_policy_t *p = sched_mlfq_new();
+    if (p)
+        p->name = "mlfq-floor";     /* init reads the name to enable the floor */
+    return p;
 }
 
 sched_policy_t *sched_mlfq_new(void)

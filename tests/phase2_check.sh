@@ -44,6 +44,7 @@ VARIANTS=(
     "prio|--policy prio --preemptive off"
     "prio-preempt|--policy prio --preemptive on"
     "mlfq|--policy mlfq --age 60"
+    "mlfq-floor|--policy mlfq-floor --age 60"
 )
 
 for v in "${VARIANTS[@]}"; do

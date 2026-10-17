@@ -110,7 +110,8 @@ valgrind: all
 	$(call run_tests,BIN_DIR=$(BUILD) RELIEF_WRAP="$(VALGRIND)" TEST_TIMEOUT=30 PHASE1_CAMPS=2)
 
 # Experiment E1 (deterministic: same seeds -> identical CSV). Plotting needs matplotlib.
-E1_FIGS := e1_wait_by_severity.png e1_critical_response.png e1_starved.png e1_worst_wait.png
+E1_FIGS := e1_wait_by_severity.png e1_critical_response.png e1_starved.png e1_worst_wait.png \
+           e1b_starved_vs_load.png e1b_critical_response_vs_load.png
 e1: schedsim
 	experiments/run_e1.sh
 	python3 -I experiments/plot_e1.py

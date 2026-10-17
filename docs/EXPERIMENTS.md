@@ -6,6 +6,7 @@ Every experiment is deterministic for a given `--seed` and writes CSV to `experi
 | ID | Topic (Unit) | Question | Status |
 |----|--------------|----------|--------|
 | E1 | CPU scheduling (Unit 2) | Which triage policy serves CRITICAL requests fastest without starving the rest? | done |
+| E1b | CPU scheduling under load (Unit 2) | At what offered load does MLFQ stop reaching zero starvation, and how do prio-preempt, mlfq and mlfq-floor degrade? | done |
 | E2 | Traditional and modern UNIX scheduling (Unit 2) | How do Linux's CFS/EEVDF + nice, SCHED_FIFO and SCHED_RR treat the same rescue workload, compared with textbook priority and our MLFQ? | done |
 
 ## E1: triage scheduling comparison
@@ -63,6 +64,7 @@ Mean over the 5 seeds, with the min–max range in brackets:
 | `prio` | 230.4 (132.8–315.6) | 14.3 (8.4–22.2) | 75.7 (45.9–113.8) | 403.5 (229.7–549.1) | 14.3 (8.4–22.2) | 211 (173–244) | 882 (641–1116) | 0 |
 | `prio-preempt` | 233.2 (134.8–318.8) | **9.0** (2.8–17.0) | 74.0 (43.3–111.9) | 411.9 (237.7–558.4) | **9.0** (2.8–17.0) | 214 (179–244) | 886 (642–1118) | 0 |
 | `mlfq` | 191.0 (113.8–267.3) | 229.0 (106.3–329.9) | 202.5 (111.5–305.6) | 171.5 (117.6–221.7) | 25.6 (12.3–49.5) | 264 (165–334) | 973 (691–1197) | 767 (480–967) |
+| `mlfq-floor` | 190.9 (113.2–267.3) | 219.5 (85.2–326.7) | 204.4 (115.0–306.5) | 172.8 (120.4–222.1) | 25.5 (11.6–49.5) | 261 (163–329) | 974 (692–1197) | 766 (479–967) |
 
 ![Average waiting time by severity](figures/e1/e1_wait_by_severity.png)
 ![CRITICAL response time](figures/e1/e1_critical_response.png)
@@ -97,6 +99,52 @@ aging promotes almost everything into Q0, and the 8-minute Q0 quantum demotes lo
 That erases the priority MLFQ starts with. Aging bounds how long one job can be overtaken; it cannot
 make waits short when demand exceeds capacity. E2 should test a longer aging threshold, never demoting
 CRITICAL work, and more teams.
+
+`mlfq-floor` (added after the trace investigation below: CRITICAL work is never demoted below Q1)
+changes almost nothing here: CRITICAL wait 219.5 vs 229.0 min, starved 261 vs 264, the rest within
+noise. The floor only acts on a CRITICAL job's second demotion (Q1 → Q2), and the trace shows that
+long CRITICAL jobs rarely get there: aging lifts them back to Q0 first.
+
+## E1b: load sweep
+**Question:** E1 ran at about 90% load. At what load does MLFQ stop reaching zero starvation, and how
+do `prio-preempt`, `mlfq` and `mlfq-floor` degrade as the load rises?
+
+**Setup** (`experiments/run_e1.sh`, part of `make e1`):
+- Same seed family as E1 (seeds 1–5, 500 requests, 3 teams, starvation = wait > 120 min).
+- For each seed the generator produces the *same* 500 requests at every load. Its random draws do not
+  depend on `--duration`, and the script checks that the total work W is unchanged. Only the duration
+  changes: D = W / (3 × load), for loads of 30, 45, 60, 75, 90 and 105%.
+- **Arrival profile:** the generator's default (rate 3× higher in the middle third, so the peak runs
+  at 1.8× the average load), **not** E1's 10× rush hour. A first run with the rush hour found no
+  threshold. The rush window overloads 3 teams at *any* average load: at 30%, MLFQ still starved
+  7.2 requests on average (prio-preempt 12.0). With the rush window scaled with D, the figure was 74.
+- Results: `experiments/results/e1b.csv` (one row per policy, load and seed, with `target_load` and
+  `offered_load` columns in front of the usual summary).
+
+| Load | prio-preempt starved | mlfq starved | mlfq-floor starved | prio-preempt CRIT response | mlfq CRIT response | mlfq-floor CRIT response |
+|-----:|------------------:|----------:|----------------:|-----:|-----:|-----:|
+| 30% | 0 (max 0) | **0** (max 0) | 0 (max 0) | 0.0 | 0.0 | 0.0 |
+| 45% | 19.4 (max 59) | 11.4 (max 30) | 10.6 (max 27) | 0.1 | 0.0 | 0.0 |
+| 60% | 125.2 (max 169) | 134.2 (max 271) | 134.2 (max 263) | 0.2 | 5.9 | 5.9 |
+| 75% | 182.6 (max 204) | 263.6 (max 348) | 261.0 (max 349) | 0.3 | 32.8 | 32.6 |
+| 90% | 252.0 (max 311) | 343.0 (max 388) | 341.6 (max 394) | 0.5 | 66.6 | 66.6 |
+| 105% | 289.0 (max 330) | 363.8 (max 390) | 363.0 (max 394) | 0.9 | 95.5 | 95.3 |
+
+Starved counts are means over 5 seeds (out of 500 requests). Response times are CRITICAL averages in
+simulated minutes. At 45%, MLFQ starved requests in 4 of 5 seeds (seed 2: 0).
+
+![Starved requests against load](figures/e1/e1b_starved_vs_load.png)
+![CRITICAL response against load](figures/e1/e1b_critical_response_vs_load.png)
+
+**Conclusion:**
+1. MLFQ reaches zero starvation only at 30% offered load. **At 45% it starts starving requests**
+   (11 on average, up to 30), because the 1.8× mid-run peak already exceeds capacity there.
+2. Above 60%, MLFQ starves more than prio-preempt (264 vs 183 at 75%). Its CRITICAL response grows from 0 to
+   95 min, while prio-preempt keeps CRITICAL under 1 min at every load. MLFQ's advantage disappears
+   once aging promotes the backlog into Q0.
+3. `mlfq-floor` tracks `mlfq` within noise at every load, so the severity floor does not change
+   MLFQ's behaviour under load. Only admission control or more teams would, not a different queue
+   discipline.
 
 ## E2: real Linux scheduling vs textbook priority
 
@@ -212,6 +260,72 @@ little between runs (`cfs-flat` CRITICAL wait: 235, 237 and 251 in three runs).
 - **For relief triage:** run life-critical work as real-time FIFO, cap it so it cannot monopolise the
   CPU (which RT throttling only partly does), and give the rest weighted fair sharing. That is the
   design Linux itself uses.
+
+### Why simulated MLFQ makes CRITICAL wait longest (trace investigation)
+In the table above, simulated MLFQ gives CRITICAL a *higher* average wait (184) than URGENT
+(123) or ROUTINE (129), even though CRITICAL enters at the top queue.
+
+**How it was traced.** `schedsim --trace FILE` writes every arrive, dispatch, preempt, demote,
+promote and finish event with the job's queue level. `experiments/analyze_mlfq_trace.py` replays the
+trace and checks the MLFQ rules on every event:
+- a job enters at its severity level;
+- a demotion comes exactly one full quantum after the dispatch (Q0 8, Q1 16) and moves one level down;
+- a promotion only happens to a waiting job, after more than `--age` minutes at that level, and moves
+  one level up;
+- the waiting time rebuilt from the events equals finish − arrival − burst.
+
+To reproduce:
+```sh
+python3 experiments/gen_scenario.py --rows 120 --seed 1 --duration 2000 --rush 60-120 -o /tmp/e2.csv  # E2 scenario
+build/schedsim --policy mlfq --age 60 --teams 1 --seed 1 --scenario /tmp/e2.csv --trace /tmp/mlfq_trace.csv
+python3 experiments/analyze_mlfq_trace.py /tmp/mlfq_trace.csv --show 3
+```
+The trace reproduces E2's numbers exactly, and **every invariant holds for all 120 jobs**.
+
+**Verdict: not a bug. It is a real effect of demotion plus aging.** Waiting time per queue level,
+averaged per severity:
+
+| Severity | Burst | Wait in Q0 | Wait in Q1 | Wait in Q2 | Total wait | Demotions | Promotions |
+|----------|------:|-----------:|-----------:|-----------:|-----------:|----------:|-----------:|
+| CRITICAL | 26.4 | 87.1 | 93.7 | 3.4 | 184.2 | 1.94 | 1.39 |
+| URGENT | 17.6 | 46.0 | 65.1 | 11.5 | 122.6 | 0.62 | 0.83 |
+| ROUTINE | 9.8 | 38.7 | 39.4 | 51.2 | 129.2 | 0.20 | 1.15 |
+
+Average wait by burst length (number of jobs in brackets):
+
+| Burst | CRITICAL | URGENT | ROUTINE |
+|-------|---------:|-------:|--------:|
+| 1–10 | 28.0 (5) | 100.3 (11) | 102.3 (44) |
+| 11–20 | 53.2 (4) | 111.1 (18) | 215.9 (11) |
+| 21–40 | 44.7 (3) | 163.8 (12) | 320.5 (2) |
+| > 40 | **471.3 (6)** | 82.0 (1) | 78.7 (3) |
+
+- **Short CRITICAL jobs do well:** 28–53 min, the best of any severity. The high average comes from
+  6 long rescues (burst > 40) that wait 471 min each.
+- **The mechanism is a Q0 ↔ Q1 ping-pong.**
+  1. A long CRITICAL job runs its 8-minute Q0 quantum and is demoted to Q1.
+  2. At 90% load, Q1 is not served for over an hour, because Q0 always has work.
+  3. After 61 minutes of waiting, aging promotes the job back to Q0.
+  4. It gets another 8 minutes, and the cycle repeats.
+
+  The job never receives Q1's 16-minute slice, and it pays the aging delay once per 8 minutes of
+  service. Job 6000033 (burst 57) went through 6 demotions and 5 promotions and waited 619 min:
+  261 in Q0 and 358 in Q1.
+- **Long ROUTINE jobs escape this.** They start in Q2 (FCFS, no quantum), so once Q2 runs one, it
+  finishes. URGENT jobs fall between the two.
+- MLFQ is built to favour short jobs, so this is MLFQ doing what it was designed to do. Severity only
+  sets the entry queue, and burst length decides everything after that.
+
+**The `mlfq-floor` variant** (`--policy mlfq-floor`; `--crit-floor Q` sets the floor, default Q1)
+never demotes CRITICAL work below Q1. When a floored job uses up its quantum, it is put back behind
+the jobs waiting at its level or above, but not demoted further. On this scenario the floor barely helps:
+CRITICAL wait goes from 184.2 to 182.5, with 48 starved requests in both. The ping-pong happens
+between Q0 and Q1, above the floor.
+
+A diagnostic run with a floor at Q0 (`--crit-floor 0`, so CRITICAL work is never demoted) removes the
+inversion: CRITICAL 134.3, URGENT 151.0, ROUTINE 142.6. But the starved count rises to 51, so it moves
+the wait onto everyone else. That turns MLFQ back into priority scheduling with round robin inside
+Q0, so it was not added to E1.
 
 ## Baseline (Phase 2 step 2)
 `schedsim --teams 3` on `scenarios/flood_pune.csv` (200 requests in 360 min, permanently overloaded). The

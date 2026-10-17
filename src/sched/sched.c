@@ -20,6 +20,7 @@ static const policy_entry_t g_policies[] = {
     { "rr",   sched_rr_new },
     { "prio", sched_prio_new },
     { "mlfq", sched_mlfq_new },
+    { "mlfq-floor", sched_mlfq_floor_new },
 };
 
 #define N_POLICIES (sizeof g_policies / sizeof g_policies[0])

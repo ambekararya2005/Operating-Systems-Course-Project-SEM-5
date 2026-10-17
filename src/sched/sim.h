@@ -37,6 +37,10 @@ typedef struct {
     int      seed_set;          /* 0: same-minute arrivals keep input order */
     uint64_t seed;              /* 1: same-minute arrivals ordered by a seeded hash */
     int      gantt_minutes;     /* record the first N minutes for a Gantt chart (0 = none) */
+    /* Optional event trace (NULL = none): ev is "arrive", "dispatch", "preempt" or "finish";
+     * team is -1 when not on a team. Policies report promote/demote via params.on_event. */
+    void   (*trace)(void *ctx, int64_t t, const char *ev, const sched_job_t *job, int team);
+    void    *trace_ctx;
 } sim_config_t;
 
 typedef struct {

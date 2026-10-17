@@ -27,7 +27,7 @@ Layout (folders marked * are created in later phases):
 - `src/reliefd/`: `main.c` (mq loop, signals) plus one module per OS concept: `camps.c` (process table,
   fork/exec, SIGCHLD, restarts), `dispatch.c` (rescue-team pthreads + clock thread running a src/sched policy live). `src/camp/`: camp process. `src/reliefstat/`: read-only
   status reader. `src/common/`: logger, `shm.c` (POSIX shm status table: robust pshared mutex + seqlock).
-  `src/sched/`: IPC-free scheduler (`sched.c` registry, one file per policy: fcfs sjf srtf rr prio mlfq;
+  `src/sched/`: IPC-free scheduler (`sched.c` registry, one file per policy: fcfs sjf srtf rr prio mlfq(+floor);
   `sim.c` simulator, `schedsim.c` CLI); NOT on the include path (its `sched.h` would shadow `<sched.h>`).
   `src/linuxsched/`: real threads under CFS/EEVDF+nice, SCHED_FIFO, SCHED_RR (one pinned CPU, watchdog)
 - `scripts/`: `reliefctl` (getopts, awk; must pass shellcheck), `stockcheck.sh` (cron job, documented, not installed)
@@ -39,7 +39,7 @@ Layout (folders marked * are created in later phases):
   `experiments/gen_scenario.py`, so regenerate it rather than editing it by hand (`tests/traffic.sh` checks this)
 - `systemd/`: `reliefd.service` template (not installed until Phase 6). `docs/`: ARCHITECTURE.md, EXPERIMENTS.md
 - `kernel/`*: relief.ko, self-contained with its own Makefile
-- `experiments/`: `gen_scenario.py` (`--rush`), `run_e1.sh`/`plot_e1.py`, `run_e2.sh`/`plot_e2.py`. Output in
+- `experiments/`: `gen_scenario.py` (`--rush`), `run_e1.sh`/`plot_e1.py` (E1 + E1b load sweep), `analyze_mlfq_trace.py`, `run_e2.sh`/`plot_e2.py`. Output in
   `experiments/results/` (git-ignored); figures for docs are copied to `docs/figures/` (committed)
 - `build/`: binaries (`build/tsan/` for TSan). `run/`: default `$RELIEF_HOME`. Both are git-ignored
 - `$RELIEF_HOME/logs/`: `reliefd.log` is the structured key=value log
@@ -100,7 +100,7 @@ Layout (folders marked * are created in later phases):
   --quantum Q --age MIN --preemptive on|off --camp-bin PATH]`. Only RESCUE requests are scheduled. Use
   `--camps /dev/null` for no camps. `--time-scale` is the real ms per simulated minute (default 100; 0 = no pacing)
 - `build/camp --id N --scenario F [--time-scale MS]` (paced, then resident), `--id N --count N --seed S`, `--shutdown`
-- `build/schedsim --policy fcfs|sjf|srtf|rr|prio|mlfq [--scenario F --teams N --quantum Q --preemptive on|off
+- `build/schedsim --policy fcfs|sjf|srtf|rr|prio|mlfq|mlfq-floor [--crit-floor Q --trace F --scenario F --teams N --quantum Q --preemptive on|off
   --age MIN --seed S --starve MIN --csv F --gantt --summary-csv F --label L]` (offline, deterministic)
 - `python3 experiments/gen_scenario.py [--rows N --camps N --seed S --duration MIN --mix C,U,R] [-o FILE]`
 - The queue `/reliefos_requests` and shm `/reliefos_status` are system-wide: only one reliefd at a time

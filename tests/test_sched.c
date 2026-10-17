@@ -91,7 +91,7 @@ static void on_event(void *ctx, int64_t now, const sched_job_t *j, sched_event_t
 
 static sim_config_t config(int teams)
 {
-    sim_config_t c = { teams, SCHED_DEFAULT_QUANTUM, 120, 0, 0, 0 };
+    sim_config_t c = { teams, SCHED_DEFAULT_QUANTUM, 120, 0, 0, 0, NULL, NULL };
     return c;
 }
 
@@ -418,6 +418,48 @@ static void test_mlfq_demotion(void)
     CHECK(m.context_switches == 0);
 }
 
+/* mlfq-floor: a CRITICAL job is never demoted below Q1 (default floor).
+ *   CRITICAL burst 30 alone: Q0 [0,8) -> demoted to Q1 -> [8,24) uses Q1's 16-minute quantum, but
+ *   it is at its floor, so it stays in Q1 (fresh quantum, nobody else waiting) -> [24,30) done.
+ *   1 demotion (not 2 as in plain mlfq), final level Q1.
+ * The floor applies to CRITICAL only: an URGENT burst 30 still drops Q1 -> Q2 after 16 minutes.
+ * With --crit-floor 0 (params.crit_floor = 1) a CRITICAL job is never demoted at all. */
+static void test_mlfq_floor(void)
+{
+    sched_job_t crit[] = { job(1, 0, 30, CRIT) };
+    sched_job_t urg[] = { job(2, 0, 30, URG) };
+    sim_config_t cfg = config(1);
+    sim_metrics_t m;
+    events_t ev = { 0, 0 };
+    sched_params_t params;
+    sched_policy_t *p;
+
+    printf("MLFQ floor: CRITICAL never demoted below Q1\n");
+    CHECK(run_chart("mlfq-floor, one long CRITICAL job", "mlfq-floor", -1, crit, 1, &cfg, &m, &ev, 30, 2) == 0);
+    CHECK(crit[0].finish == 30 && crit[0].wait == 0);
+    CHECK(crit[0].queue_level == 1);
+    CHECK(ev.demotions == 1);
+
+    ev.demotions = ev.promotions = 0;
+    CHECK(run("mlfq-floor", -1, urg, 1, &cfg, &m, NULL, &ev) == 0);
+    CHECK(urg[0].queue_level == 2 && ev.demotions == 1);    /* URGENT: Q1 -> Q2 as usual */
+
+    memset(&params, 0, sizeof params);
+    params.teams = 1;
+    params.crit_floor = 1;                                  /* floor at Q0 */
+    params.on_event = on_event;
+    ev.demotions = ev.promotions = 0;
+    params.event_ctx = &ev;
+    p = sched_policy_create("mlfq-floor", &params);
+    CHECK(p != NULL);
+    if (p) {
+        crit[0] = job(1, 0, 30, CRIT);
+        CHECK(sim_run(p, crit, 1, &cfg, &m, NULL) == 0);
+        CHECK(crit[0].queue_level == 0 && ev.demotions == 0 && crit[0].finish == 30);
+        sched_policy_free(p);
+    }
+}
+
 /* ---- Starvation and aging -------------------------------------------------------------
  * One team. A steady stream of CRITICAL jobs C0..C49: Ck arrives at 10k with burst 10, so
  * criticals alone keep the team 100% busy until t=500. A ROUTINE job R (burst 5) arrives
@@ -477,8 +519,8 @@ static void test_starvation_and_aging(void)
 
 static void test_registry(void)
 {
-    static const char *const names[] = { "fcfs", "sjf", "srtf", "rr", "prio", "mlfq" };
-    static const int preemptive[] = { 0, 0, 1, 1, 0, 1 };
+    static const char *const names[] = { "fcfs", "sjf", "srtf", "rr", "prio", "mlfq", "mlfq-floor" };
+    static const int preemptive[] = { 0, 0, 1, 1, 0, 1, 1 };
     sched_params_t params;
 
     printf("policy registry\n");
@@ -514,6 +556,7 @@ int main(void)
     test_textbook_rr();
     test_priority();
     test_mlfq_demotion();
+    test_mlfq_floor();
     test_starvation_and_aging();
     test_registry();
 
