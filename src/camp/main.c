@@ -762,17 +762,46 @@ static int on_reply(replay_t *rp, const relief_msg_t *m)
     return 0;
 }
 
-/* Can banker row x be sent now? (claim, resource order, task sequence) */
+static int task_started(const replay_t *rp, const task_t *t)
+{
+    return task_has_state(rp, t, IT_PENDING) || task_has_state(rp, t, IT_HELD);
+}
+
+/* Units of Banker's column j the camp has committed: lone rows asked for or held, plus the
+ * whole of every task it has started (reserved until the task ends). A task is started only
+ * when all of it fits in the claim, so a started task can always finish within the claim and
+ * two tasks of this camp can never block each other (a deadlock inside the camp). */
+static int committed(const replay_t *rp, int j)
+{
+    int u = 0;
+    for (long k = 0; k < rp->n; k++) {
+        const item_t *x = &rp->it[k];
+        if (x->bi != j || x->state == IT_DONE)
+            continue;
+        if (x->state == IT_PENDING || x->state == IT_HELD ||
+            (x->task >= 0 && task_started(rp, &rp->tk[x->task])))
+            u += x->req->units;
+    }
+    return u;
+}
+
+/* Can banker row x be sent now? (claim, task sequence) */
 static int may_send(const replay_t *rp, const item_t *x)
 {
     camp_ctx_t *c = rp->c;
-    if (rp->outstanding[x->bi] + x->req->units > c->claim[x->bi])
-        return 0;
-    if (x->task >= 0) {
-        const task_t *t = &rp->tk[x->task];
-        if (task_has_state(rp, t, IT_PENDING) || task_next(rp, t) != x - rp->it)
-            return 0;               /* one row at a time, in the task's order */
-    }
+    if (x->task < 0)
+        return committed(rp, x->bi) + x->req->units <= c->claim[x->bi];
+    const task_t *t = &rp->tk[x->task];
+    if (task_has_state(rp, t, IT_PENDING) || task_next(rp, t) != x - rp->it)
+        return 0;                   /* one row at a time, in the task's order */
+    if (task_started(rp, t))
+        return 1;                   /* reserved when the task started */
+    int need[RELIEF_BANKER_RES] = { 0 };
+    for (int r = 0; r < t->n; r++)
+        need[rp->it[t->rows[r]].bi] += rp->it[t->rows[r]].req->units;
+    for (int j = 0; j < RELIEF_BANKER_RES; j++)
+        if (committed(rp, j) + need[j] > c->claim[j])
+            return 0;               /* the whole task must fit in the claim */
     return 1;
 }
 
@@ -787,7 +816,7 @@ static int send_bundle(replay_t *rp, task_t *t)
         units[y->bi] += y->req->units;
     }
     for (int j = 0; j < RELIEF_BANKER_RES; j++)
-        if (rp->outstanding[j] + units[j] > rp->c->claim[j])
+        if (committed(rp, j) + units[j] > rp->c->claim[j])
             return 0;
     if (send_request_ex(rp->c, rp->it[t->rows[0]].req, units, t->id) == -1)
         return -1;
@@ -917,7 +946,7 @@ static long run_scenario(camp_ctx_t *c, scenario_row_t *rows, long n, unsigned l
                 continue;
             }
             if (!may_send(&rp, x)) {
-                if (!x->noted && rp.outstanding[x->bi] + x->req->units > c->claim[x->bi]) {
+                if (!x->noted && committed(&rp, x->bi) + x->req->units > c->claim[x->bi]) {
                     x->noted = 1;
                     c->deferred++;
                     LOG_INFO("holding back id=%u resource=%s units=%u: would exceed the claim of %d",

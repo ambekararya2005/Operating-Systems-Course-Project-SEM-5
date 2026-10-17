@@ -12,6 +12,9 @@
 #   6. scenarios/deadlock_mix.csv (random tasks, default resources) completes under
 #      prevent, detect and avoid
 #   7. bad --detect-interval / --all-or-nothing without prevent exit 2
+#   8. build/dlsim (the deterministic simulator of experiment E3): deadlock.csv freezes under
+#      none and completes under every other mode; the mix completes under prevent and avoid;
+#      two runs give identical output
 # In every completed run each grant is released (or revoked by recovery) and nothing is left.
 #   BIN_DIR       directory holding the binaries (default: build)
 #   RELIEF_WRAP   optional command prefix for reliefd (and its camps), e.g. valgrind
@@ -154,6 +157,25 @@ for bad in "--deadlock detect --detect-interval 0" "--deadlock avoid --all-or-no
     [[ $rc -eq 2 ]] || fail "reliefd $bad should exit 2, got $rc"
 done
 pass "bad --detect-interval and --all-or-nothing without prevent exit 2"
+
+# 8. The deterministic simulator.
+dlsim() { "${WRAP[@]}" "$BIN/dlsim" "$@"; }
+out=$(dlsim --deadlock none --scenario "$SCEN" --resources "$RES") || fail "dlsim none"
+grep -q 'completed 0/6, deadlocks reached 1 (FROZEN)' <<< "$out" || fail "dlsim none should freeze: $out"
+for mode in "prevent" "prevent --all-or-nothing" "avoid" "detect"; do
+    read -r -a opts <<< "--deadlock $mode"
+    out=$(dlsim "${opts[@]}" --scenario "$SCEN" --resources "$RES") || fail "dlsim $mode"
+    grep -q 'completed 6/6, deadlocks reached [01],' <<< "$out" || fail "dlsim $mode should complete: $out"
+done
+for mode in prevent avoid; do
+    a=$(dlsim --deadlock "$mode" --scenario "$MIX" --timeline "$RELIEF_HOME/t1.csv") || fail "dlsim mix $mode"
+    b=$(dlsim --deadlock "$mode" --scenario "$MIX" --timeline "$RELIEF_HOME/t2.csv") || fail "dlsim mix $mode"
+    if ! { grep -q 'deadlocks reached 0,' <<< "$a" && [[ "$a" == "$b" ]] &&
+           cmp -s "$RELIEF_HOME/t1.csv" "$RELIEF_HOME/t2.csv"; }; then
+        fail "dlsim $mode on the mix: should finish without deadlock, identically twice: $a"
+    fi
+done
+pass "dlsim: deadlock.csv freezes under none, completes otherwise; the mix completes deterministically"
 
 if ls /dev/mqueue/reliefos_camp_* >/dev/null 2>&1; then
     fail "camp reply queues left behind: $(ls /dev/mqueue/reliefos_camp_*)"

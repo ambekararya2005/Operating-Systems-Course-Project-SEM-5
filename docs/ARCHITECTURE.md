@@ -515,6 +515,16 @@ Mutual exclusion is never broken: a truck or a boat cannot be shared.
 - **Message order:** before reaping exited camps, reliefd reads what is still in the request
   queue. A camp's last RELEASEs and BYE are handled before the exit releases what it still holds.
 
+**`build/dlsim`** (`src/dlsim/dlsim.c`, experiment E3) replays a scenario's Banker's resources with the
+same policies and camp rules on a one-minute clock, with no threads or IPC, so every mode can be
+compared deterministically.
+- **Deadlock count:** it counts deadlocks with the detection algorithm over *jobs* (tasks and lone
+  rows), every minute.
+- **Task reservation:** a camp starts a task only when the whole task fits in its claim, and
+  reserves it until the task ends, in both dlsim and `src/camp/main.c`. Otherwise two tasks of the
+  same camp can each take part of the claim and wait for the rest, a deadlock *inside* the camp.
+  E3's first runs showed exactly that.
+
 `reliefctl waitfor` prints the graph from shared memory (`bk_proc[].request`) as edges, plus any
 cycle. With `--dot` it prints Graphviz DOT, and `docs/waitfor.dot` is a live capture of
 `deadlock.csv` under `none`:

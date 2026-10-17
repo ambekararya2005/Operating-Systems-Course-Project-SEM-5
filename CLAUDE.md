@@ -29,7 +29,7 @@ Layout (folders marked * are created in later phases):
   status reader. `src/common/`: logger, `shm.c` (POSIX shm status table: robust pshared mutex + seqlock).
   `src/sched/`: IPC-free scheduler (`sched.c` registry, one file per policy: fcfs sjf srtf rr prio mlfq(+floor);
   `sim.c` simulator, `schedsim.c` CLI); NOT on the include path (its `sched.h` would shadow `<sched.h>`). `src/deadlock/` (same): `banker.c`, `waitfor.c` (pure), `deadlock.c` (--deadlock table).
-  `src/linuxsched/`: real threads under CFS/EEVDF+nice, SCHED_FIFO, SCHED_RR (one pinned CPU, watchdog). `src/racelab/`: critical section (Peterson ± fence, mutex, TAS, sem). `src/rwlab/`: writer starvation
+  `src/linuxsched/`: real threads under CFS/EEVDF+nice, SCHED_FIFO, SCHED_RR (one pinned CPU, watchdog). `src/racelab/`: critical section (Peterson ± fence, mutex, TAS, sem). `src/rwlab/`: writer starvation. `src/dlsim/`: deterministic deadlock simulator (E3)
 - `scripts/`: `reliefctl` (getopts, awk; must pass shellcheck), `stockcheck.sh` (cron job, documented, not installed)
 - `tests/`: `smoke.sh` (IPC), `camps.sh` (supervision), `traffic.sh` (paced traffic, full queue), `signals.sh`
   (alert/dump/graceful exit), `status.sh` (shm), `cli.sh` (reliefctl), `phase1_smoke.sh` (gate M1), `sched.sh`
@@ -39,7 +39,7 @@ Layout (folders marked * are created in later phases):
   `experiments/gen_scenario.py`, so regenerate it rather than editing it by hand (`tests/traffic.sh` checks this)
 - `systemd/`: `reliefd.service` template (not installed until Phase 6). `docs/`: ARCHITECTURE.md, EXPERIMENTS.md
 - `kernel/`*: relief.ko, self-contained with its own Makefile
-- `experiments/`: `gen_scenario.py` (`--rush`), `run_e1.sh`/`plot_e1.py` (E1 + E1b load sweep), `analyze_mlfq_trace.py`, `run_e2.sh`/`plot_e2.py`, `run_e4.sh`/`plot_e4.py` (+ `docs/strace_futex.txt`). Output in
+- `experiments/`: `gen_scenario.py` (`--rush`), `run_e1.sh`/`plot_e1.py` (E1 + E1b load sweep), `analyze_mlfq_trace.py`, `run_e2.sh`/`plot_e2.py`, `run_e3.sh`/`plot_e3.py`, `gen_deadlock.py`, `run_e4.sh`/`plot_e4.py` (+ `docs/strace_futex.txt`). Output in
   `experiments/results/` (git-ignored); figures for docs are copied to `docs/figures/` (committed)
 - `build/`: binaries (`build/tsan/` for TSan). `run/`: default `$RELIEF_HOME`. Both are git-ignored
 - `$RELIEF_HOME/logs/`: `reliefd.log` is the structured key=value log
@@ -89,7 +89,7 @@ Layout (folders marked * are created in later phases):
   being loaded.
 
 ## Commands
-- `make [test|tsan|valgrind|clean|e1|e2|e4|e5]`: tsan runs under `setarch -R` (GCC 13 vs WSL2 ASLR); plots need matplotlib.
+- `make [test|tsan|valgrind|clean|e1|e2|e3|e4|e5]`: tsan runs under `setarch -R` (GCC 13 vs WSL2 ASLR); plots need matplotlib.
   E2 fifo/rr need `sudo setcap cap_sys_nice+ep build/linuxsched` (lost on every rebuild; the user runs sudo)
 - `scripts/reliefctl start|stop|status [--json]|sched [--json]|banker [--json]|waitfor [--dot]|ps|tree`, `alert|dump <id|all>` (SIGUSR1: next 5 requests CRITICAL;
   SIGUSR2: counters), `report [--since MIN] [--last-run]` (incl. scheduler per-severity waits), `simulate flood
@@ -116,5 +116,5 @@ Layout (folders marked * are created in later phases):
 Work the phases in order. Within a phase, ship all P0 features before any P1/P2.
 
 ## Current status
-Phase 2 complete (gate M2). Phase 3: steps 1-4 done (racelab/E4; dock, inventory, rwlab/E5; Banker's; prevent/detect, `scenarios/deadlock*.csv`).
+Phase 2 complete (gate M2). Phase 3: steps 1-5 done (racelab/E4; dock, inventory, rwlab/E5; Banker's; prevent/detect; dlsim/E3). Next: Phase 4.
 Update this line as steps complete.

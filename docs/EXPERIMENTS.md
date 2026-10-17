@@ -8,6 +8,7 @@ Every experiment is deterministic for a given `--seed` and writes CSV to `experi
 | E1 | CPU scheduling (Unit 2) | Which triage policy serves CRITICAL requests fastest without starving the rest? | done |
 | E1b | CPU scheduling under load (Unit 2) | At what offered load does MLFQ stop reaching zero starvation, and how do prio-preempt, mlfq and mlfq-floor degrade? | done |
 | E2 | Traditional and modern UNIX scheduling (Unit 2) | How do Linux's CFS/EEVDF + nice, SCHED_FIFO and SCHED_RR treat the same rescue workload, compared with textbook priority and our MLFQ? | done |
+| E3 | Deadlock prevention, avoidance, detection and recovery (Unit 3) | What does each way of handling deadlock cost on the same vehicle-heavy workload? | done |
 | E4 | Critical-section problem, Peterson, semaphores; synchronisation in Linux (Unit 3) | Which entry/exit sections keep a shared counter correct, what does each cost, and when does a Linux mutex enter the kernel? | done |
 | E5 | Readers-writers problem (Unit 3) | Does the textbook readers-preference solution starve writers, and does a writer-preference rwlock fix it? | done |
 
@@ -328,6 +329,106 @@ A diagnostic run with a floor at Q0 (`--crit-floor 0`, so CRITICAL work is never
 inversion: CRITICAL 134.3, URGENT 151.0, ROUTINE 142.6. But the starved count rises to 51, so it moves
 the wait onto everyone else. That turns MLFQ back into priority scheduling with round robin inside
 Q0, so it was not added to E1.
+
+## E3: deadlock handling compared
+**Question:** On the same vehicle-heavy workload, what does each way of dealing with deadlock cost?
+The options are doing nothing, preventing (resource ordering or all-or-nothing), avoiding (Banker's),
+or detecting and recovering.
+
+### Setup
+- **Simulator:** `make e3` (`experiments/run_e3.sh`) runs **`build/dlsim`**. It is a deterministic,
+  one-minute-clock simulator of reliefd + camps. It uses the same policy code (`src/deadlock/`) and
+  the same camp rules: claims, tasks acquired one row after another, retry in order after an order
+  rejection, bundles, revoke and requeue. It has no threads or IPC, so a run is a pure function of
+  the scenario, and two runs give byte-identical CSVs.
+- **Workload:** 5 seeds of a **300-request task mix** (`gen_deadlock.py --rows 300 --camps 8
+  --duration 1200`):
+  - 89% vehicles: 267 truck/boat rows and 33 kit rows on seed 1;
+  - tasks of 2–3 resources, with trucks and boats requested in random orders;
+  - the default 3 trucks and 2 boats, so demand is well above capacity.
+
+  Also `scenarios/deadlock.csv` (2 camps, 2 trucks, 2 boats).
+- **Modes:**
+  - `none`;
+  - `prevent` (per-task resource ordering);
+  - `prevent --all-or-nothing`;
+  - `avoid`;
+  - `detect`, checking every 5 minutes and recovering by preempting a vehicle.
+- **Metrics:**
+  - **deadlocks reached:** new deadlocks found by the detection algorithm run every minute over
+    *jobs*, meaning tasks and lone rows, the units that hold and wait;
+  - **delay:** request due → granted, for completed requests;
+  - **vehicle time:** split three ways: *busy* (held by a complete task or a lone row, doing the
+    work), *held idle* (held by a task still waiting for its next row) and *free*.
+
+### Results (300-request mix, mean of 5 seeds)
+| Mode | Completed (of 300) | Deadlocks reached | Requests/hour | Avg delay (min) | Max delay | Unsafe denials | Preemptions | Order rejects | Vehicles busy / held idle / free |
+|------|------:|------:|------:|------:|------:|------:|------:|------:|:------:|
+| `none` | **36.8** (14–61), frozen 5/5 | 1.6 | 1.8 | 19.7* | 102 | – | – | – | 11% / **86%** / 3% |
+| `prevent` (ordering) | 300 | 0 | **13.2** | 93.2 | 328 | – | – | 75.0 | 77% / 19% / 3% |
+| `prevent --all-or-nothing` | 300 | 0 | **13.3** | 92.9 | 292 | – | – | – | 78% / 0% / **22%** |
+| `avoid` (Banker's) | 300 | 0 | 11.7 | 191.0 | 675 | 69.2 | – | – | 68% / 11% / 20% |
+| `detect` (+ recovery) | 300 | **186.6** | 5.3 | **1227.9** | 3244 | – | **572.0** | – | 36% / **62%** / 1% |
+
+\* Only the requests that completed before the freeze: the other ~263 wait forever.
+
+On `deadlock.csv`:
+- `none` freezes at minute 10 with 0 of 6 done: one deadlock, the circular wait camp 1 ↔ camp 2.
+- Every other mode finishes all 6 in 70 minutes:
+  - `prevent`: 2 order rejections;
+  - `avoid`: 1 unsafe denial;
+  - `detect`: 1 preemption;
+  - all-or-nothing: the longest average delay, 21 min vs 11–13.
+
+![Requests completed](figures/e3/e3_completed.png)
+![Average delay](figures/e3/e3_delay.png)
+![Vehicle time](figures/e3/e3_vehicle_time.png)
+![The none run freezing](figures/e3/e3_timeline_none.png)
+
+### What the data shows
+- **Doing nothing deadlocks, and the deadlock spreads.**
+  - In seed 1 the last request completes at minute 162. After that, 3 trucks and 2 boats are held
+    forever by tasks that each wait for a vehicle another of them holds.
+  - Every later request waits behind them, so 86% of all vehicle time is "held idle" and only 37
+    of 300 requests complete.
+  - One cycle takes away the whole fleet, not only the vehicles of the camps on the cycle.
+- **Prevention works but wastes capacity, in two different ways.**
+  - **Ordering** (circular wait broken) rejected 75 out-of-order requests per run. Each rejected
+    task released what it held and started again. While a task waits for its next, higher-ordered
+    resource, it still holds the lower ones: 19% of vehicle time held idle.
+  - **All-or-nothing** (hold and wait broken) never holds a vehicle idle (0%), but 22% of vehicle
+    time is *free*: a waiting bundle needs a truck and a boat together, so a truck that is free
+    on its own stays unused.
+  - Both finish in about the same time (13.2–13.3 requests/hour, the best of all modes).
+- **Avoidance needs the maximum claims in advance and is cautious.**
+  - Every camp must declare its peak demand up front, and the Banker's algorithm refuses 69
+    requests per run that were available but unsafe.
+  - The result is the longest delays of the modes that never deadlock: 191 min on average, 675 at
+    worst. Requests/hour is 11.7, and 20% of vehicle time is free because it was kept back for
+    safety.
+  - It never deadlocks and never wastes work, but it trades throughput for that certainty, and
+    it only works because each camp knows its future demand.
+- **Detection lets deadlocks happen and pays for recovery.**
+  - It completes everything, but deadlocks keep reforming: 187 per run, and 572 preemptions, about
+    3 per deadlock. Recovery takes back *one* vehicle from the victim, and the victim keeps the rest
+    of its task and keeps waiting, so the same group of tasks soon deadlocks again.
+  - Between detections (every 5 minutes) the deadlocked vehicles sit idle: 62% of vehicle time is
+    held idle. Delays average 1,228 minutes, and throughput (5.3 requests/hour) is less than half
+    that of prevention.
+  - Rolling back the victim's whole task, instead of one vehicle, would break the pattern faster.
+    reliefd and dlsim implement the single-vehicle preemption asked for in Phase 3 step 4.
+
+### Conclusion
+| Approach | What it costs | When to use it |
+|----------|---------------|----------------|
+| `none` | One circular wait freezes the whole fleet | Never, when vehicles are scarce |
+| Prevention | Utilisation: idle-held vehicles (ordering, 19%) or idle free vehicles (all-or-nothing, 22%); also retries (ordering) | Simple, no knowledge of future demand; the best throughput here |
+| Avoidance | Maximum claims must be known in advance; cautious refusals cost delay (191 min average) and leave 20% of capacity free | Demand is predictable (planned relief convoys) |
+| Detection + recovery | Deadlocks happen; every recovery wastes work and the victim can deadlock again (572 preemptions, 1,228 min average delay) | Deadlocks are rare (light load), or preempting is cheap |
+
+For ReliefOS's vehicle-heavy overload, **prevention** is the best trade-off, either variant. It never
+deadlocks, needs no claims, and keeps throughput highest. Its waste of capacity (about a fifth of
+vehicle time) is the price.
 
 ## E4: the critical-section problem (two camps, one boat)
 **Question:** Two camps share one boat, and both update the shared inventory counter. Which ways of

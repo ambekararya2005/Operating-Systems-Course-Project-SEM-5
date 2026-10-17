@@ -50,6 +50,7 @@ make valgrind        # tests under valgrind (camps too)
 make e1              # experiment E1: 9 variants x 5 seeds + E1b load sweep -> experiments/results/e1*.csv + graphs
 make e2              # experiment E2: real threads under CFS/EEVDF+nice, SCHED_FIFO, SCHED_RR vs simulated
                      #   (fifo/rr first: sudo setcap cap_sys_nice+ep build/linuxsched)
+make e3              # experiment E3: deadlock modes compared with build/dlsim (deterministic) -> graphs
 make e4              # experiment E4: every racelab mode x 10 runs -> experiments/results/e4.csv + graphs,
                      #   plus strace futex counts in docs/strace_futex.txt (sudo apt install strace)
 make e5              # experiment E5: readers-writers writer starvation, rwlab semaphore vs rwlock
@@ -168,7 +169,9 @@ build/reliefd $R --deadlock prevent     # resource ordering: out-of-order reques
 build/reliefd $R --deadlock prevent --all-or-nothing   # each task in one request
 build/reliefd $R --deadlock detect --detect-interval 0.2   # cycle found by DFS, a truck preempted
 ```
-Which Coffman condition each mode breaks: `docs/ARCHITECTURE.md`. A random mix: `scenarios/deadlock_mix.csv`
+`build/dlsim --deadlock MODE --scenario F` replays the same rules deterministically (experiment E3 in
+`docs/EXPERIMENTS.md`: prevention wastes about a fifth of vehicle time, avoidance needs claims and delays,
+detection keeps re-deadlocking). Which Coffman condition each mode breaks: `docs/ARCHITECTURE.md`. A random mix: `scenarios/deadlock_mix.csv`
 (`python3 experiments/gen_deadlock.py`).
 
 ### Scenarios

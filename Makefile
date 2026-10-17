@@ -19,6 +19,8 @@
 #   make e2         experiment E2: real Linux scheduling (CFS/EEVDF+nice, FIFO, RR) vs simulated
 #                   prio/mlfq -> experiments/results/e2_*.csv + PNGs (copied to docs/figures/e2/).
 #                   fifo/rr need: sudo setcap cap_sys_nice+ep build/linuxsched
+#   make e3         experiment E3: deadlock modes compared with build/dlsim (deterministic) ->
+#                   experiments/results/e3*.csv + PNGs (copied to docs/figures/e3/)
 #   make e4         experiment E4: critical-section protection, every racelab mode x 10 runs ->
 #                   experiments/results/e4.csv + PNGs (copied to docs/figures/e4/), and the
 #                   strace futex counts in docs/strace_futex.txt
@@ -57,6 +59,8 @@ LINUXSCHED_SRC := src/linuxsched/main.c $(SCHED_SRC)
 LINUXSCHED_OBJ := $(LINUXSCHED_SRC:%.c=$(OBJ)/%.o)
 RACELAB_SRC := src/racelab/main.c
 RACELAB_OBJ := $(RACELAB_SRC:%.c=$(OBJ)/%.o)
+DLSIM_SRC := src/dlsim/dlsim.c src/common/resconf.c $(DEADLOCK_SRC)
+DLSIM_OBJ := $(DLSIM_SRC:%.c=$(OBJ)/%.o)
 RWLAB_SRC := src/rwlab/main.c src/common/rwsync.c
 RWLAB_OBJ := $(RWLAB_SRC:%.c=$(OBJ)/%.o)
 TEST_BANKER_SRC := tests/test_banker.c src/deadlock/banker.c src/deadlock/deadlock.c src/deadlock/waitfor.c
@@ -82,9 +86,9 @@ VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
 # $(call run_tests,ENV...) runs every test script with the given environment.
 run_tests = for t in $(TESTS); do echo "== $$t"; $(1) $$t || exit 1; done
 
-.PHONY: all reliefd camp reliefstat schedsim linuxsched racelab rwlab clean run test tsan valgrind e1 e2 e4 e5
+.PHONY: all reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim clean run test tsan valgrind e1 e2 e3 e4 e5
 
-all: reliefd camp reliefstat schedsim linuxsched racelab rwlab $(BUILD)/shm_die_locked $(BUILD)/test_sched \
+all: reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim $(BUILD)/shm_die_locked $(BUILD)/test_sched \
      $(BUILD)/test_sync $(BUILD)/test_banker
 
 reliefd: $(BUILD)/reliefd
@@ -94,6 +98,7 @@ schedsim: $(BUILD)/schedsim
 linuxsched: $(BUILD)/linuxsched
 racelab: $(BUILD)/racelab
 rwlab: $(BUILD)/rwlab
+dlsim: $(BUILD)/dlsim
 
 $(BUILD)/reliefd: $(RELIEFD_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
@@ -114,6 +119,9 @@ $(BUILD)/linuxsched: $(LINUXSCHED_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/racelab: $(RACELAB_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/dlsim: $(DLSIM_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/rwlab: $(RWLAB_OBJ)
@@ -164,6 +172,14 @@ e2: linuxsched schedsim
 	@mkdir -p docs/figures/e2
 	cp $(addprefix experiments/results/,$(E2_FIGS)) docs/figures/e2/
 
+# Experiment E3 (deterministic: same seeds -> identical CSV).
+E3_FIGS := e3_completed.png e3_delay.png e3_vehicle_time.png e3_timeline_none.png
+e3: dlsim
+	experiments/run_e3.sh
+	python3 -I experiments/plot_e3.py
+	@mkdir -p docs/figures/e3
+	cp $(addprefix experiments/results/,$(E3_FIGS)) docs/figures/e3/
+
 # Experiment E4 (real threads: the racy modes' errors and all runtimes vary between runs).
 E4_FIGS := e4_error.png e4_runtime.png
 e4: racelab
@@ -181,4 +197,4 @@ clean:
 
 -include $(RELIEFD_OBJ:.o=.d) $(CAMP_OBJ:.o=.d) $(RELIEFSTAT_OBJ:.o=.d) $(SHM_DIE_OBJ:.o=.d) \
          $(SCHEDSIM_OBJ:.o=.d) $(TEST_SCHED_OBJ:.o=.d) $(LINUXSCHED_OBJ:.o=.d) \
-         $(RACELAB_OBJ:.o=.d) $(RWLAB_OBJ:.o=.d) $(TEST_SYNC_OBJ:.o=.d) $(TEST_BANKER_OBJ:.o=.d)
+         $(RACELAB_OBJ:.o=.d) $(RWLAB_OBJ:.o=.d) $(DLSIM_OBJ:.o=.d) $(TEST_SYNC_OBJ:.o=.d) $(TEST_BANKER_OBJ:.o=.d)
