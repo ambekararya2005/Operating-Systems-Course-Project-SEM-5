@@ -117,4 +117,4 @@ Work the phases in order. Within a phase, ship all P0 features before any P1/P2.
 
 ## Current status
 Phase 1 complete (gate M1). Phase 2: steps 1-4 done (scheduler + 6 policies, `schedsim`, live teams in reliefd,
-E1 done: hypothesis not supported); step 5 E2 (real Linux scheduling) done for CFS modes, FIFO/RR await setcap.
+E1: hypothesis not supported); step 5 E2 done (Linux FIFO ≈ sim preemptive prio; MLFQ ≈ fair sharing).

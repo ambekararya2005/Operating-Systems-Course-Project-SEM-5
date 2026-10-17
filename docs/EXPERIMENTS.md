@@ -6,7 +6,7 @@ Every experiment is deterministic for a given `--seed` and writes CSV to `experi
 | ID | Topic (Unit) | Question | Status |
 |----|--------------|----------|--------|
 | E1 | CPU scheduling (Unit 2) | Which triage policy serves CRITICAL requests fastest without starving the rest? | done |
-| E2 | Traditional and modern UNIX scheduling (Unit 2) | How do Linux's CFS/EEVDF + nice, SCHED_FIFO and SCHED_RR treat the same rescue workload, compared with textbook priority and our MLFQ? | CFS modes done; FIFO/RR need `CAP_SYS_NICE` |
+| E2 | Traditional and modern UNIX scheduling (Unit 2) | How do Linux's CFS/EEVDF + nice, SCHED_FIFO and SCHED_RR treat the same rescue workload, compared with textbook priority and our MLFQ? | done |
 
 ## E1: triage scheduling comparison
 
@@ -130,31 +130,32 @@ implemented by EEVDF. The machine has 16 CPUs. Real-time throttling is on (`sche
   | `fifo` | `SCHED_FIFO` | real-time priority 30 / 20 / 10 |
   | `rr` | `SCHED_RR` | real-time priority 30 / 20 / 10 |
 
-  Without `CAP_SYS_NICE`, negative nice is refused (`RLIMIT_NICE` = 0), so `cfs-nice` uses **0 / +5 / +10**.
-  The spacing is the same, and fair-class weights depend only on nice *differences*, so the CPU shares
-  are identical. FIFO/RR always need `CAP_SYS_NICE`.
-- **Simulated counterparts:** `schedsim --teams 1` on the same scenario: `prio`, `prio` preemptive, and `mlfq`
-  with age 60. E1's numbers are not reused here, because E1 used 3 teams on a different load.
+  FIFO/RR and negative nice need `CAP_SYS_NICE`, granted once with
+  `sudo setcap cap_sys_nice+ep build/linuxsched`. Without it, `cfs-nice` falls back to 0 / +5 / +10
+  (same spacing, same CPU shares) and FIFO/RR are skipped.
+- **Thread creation:** with the capability, the thread that creates the workers runs at `SCHED_FIFO` 40,
+  above every worker, so arrivals stay on time (creation lag ≤ 0.83 ms here).
+- **Simulated counterparts:** `schedsim --teams 1` on the same scenario: `prio`, `prio` preemptive, and
+  `mlfq` with age 60. E1's numbers are not reused here, because E1 used 3 teams on a different load.
 - **Safety:**
-  - A watchdog thread (at the highest `SCHED_FIFO` priority when allowed) aborts any run after 30 s.
+  - A watchdog thread at the highest `SCHED_FIFO` priority aborts any run after 30 s, so a FIFO bug
+    cannot freeze WSL.
   - Scenarios needing more than 10 s of CPU are refused.
-  - With privilege, the thread that creates the workers runs at `SCHED_FIFO` 40, above every worker,
-    so arrivals stay on time.
-  - `tests/linuxsched.sh` checks the pinning, the CPU-time budget, the nice spacing, the budget
-    refusal, and that the watchdog really aborts a runaway run.
-- **Reproduce:** `make e2` (or `experiments/run_e2.sh` then `experiments/plot_e2.py`). For FIFO/RR, first run
-  `sudo setcap cap_sys_nice+ep build/linuxsched`; every rebuild drops this.
+  - `tests/linuxsched.sh` checks the pinning, the CPU-time budget, the nice spacing, the budget refusal,
+    and that the watchdog really aborts a runaway run.
+- **Reproduce:** `make e2` (or `experiments/run_e2.sh` then `experiments/plot_e2.py`). Every rebuild of
+  `linuxsched` drops the capability, so rerun `setcap` after `make`.
 
 ### Results
-Simulated minutes; a single run each. Linux timings vary slightly between runs: a rerun of `cfs-flat`
-gave a CRITICAL wait of 235 instead of 237.
+Simulated minutes; a single run of each mode, all four in the same privileged run. Linux timings vary a
+little between runs (`cfs-flat` CRITICAL wait: 235, 237 and 251 in three runs).
 
 | Variant | Response CRIT | Response URG | Response ROUT | Wait CRIT | Wait URG | Wait ROUT |
 |---------|-------------:|------------:|-------------:|---------:|--------:|---------:|
-| Linux `cfs-flat` | 0.4 | 0.5 | 0.4 | 237.0 | 131.5 | 76.8 |
-| Linux `cfs-nice` | 0.2 | 0.1 | 0.2 | 120.2 | 139.5 | 189.2 |
-| Linux `fifo` | *not yet measured* | | | | | |
-| Linux `rr` | *not yet measured* | | | | | |
+| Linux `cfs-flat` | 3.0 | 3.5 | 2.9 | 250.9 | 142.7 | 83.6 |
+| Linux `cfs-nice` | 2.0 | 1.2 | 1.4 | 128.8 | 149.6 | 201.2 |
+| Linux `fifo` | **0.0** | 64.8 | 198.3 | **23.4** | 93.0 | 210.4 |
+| Linux `rr` | **0.0** | 65.6 | 195.8 | 31.7 | 97.9 | 209.9 |
 | sim `prio` | 35.5 | 94.4 | 240.0 | 35.5 | 94.4 | 240.0 |
 | sim `prio` preemptive | 27.3 | 88.9 | 240.0 | 27.3 | 96.4 | 247.6 |
 | sim `mlfq` | 16.1 | 51.1 | 99.5 | 184.2 | 122.6 | 129.2 |
@@ -166,36 +167,51 @@ gave a CRITICAL wait of 235 instead of 237.
 - **Textbook priority is strict:** a higher-priority job always runs first, and lower ones wait
   (possibly forever). **The fair class is proportional:** every runnable thread gets CPU in proportion
   to its weight, and none is starved.
-- **Response is almost zero in both fair modes**, 0.1–0.5 simulated minutes (under 2 ms of real time).
-  EEVDF gives every runnable thread a short slice soon after it wakes, so nice barely affects *when* a
-  thread first runs.
+- **Every fair-class thread starts within a few milliseconds**, 1–3.5 simulated minutes (4–14 ms), whatever
+  its nice value. A new thread waits for EEVDF to reach its virtual deadline, which takes a few slices,
+  but never for a whole higher-priority job. nice barely affects *when* a thread first runs.
 - **nice changes the share, so it shows up in the wait.**
   - With nice 0 for everyone (`cfs-flat`), the CPU is shared equally. Long jobs then finish last, so
-    CRITICAL rescues (15–45 min of work) wait the *longest* (237 min) and short ROUTINE kits the shortest (77).
-  - With nice spacing of 5 (`cfs-nice`), the weights are 1024 / 335 / 110, so a CRITICAL thread gets
-    about 9× the share of a ROUTINE one. That halves the CRITICAL wait (237 → 120) and roughly doubles
-    the ROUTINE wait (77 → 189).
-  - It is still far from textbook priority (CRITICAL waits 27–36 min), because ROUTINE threads keep
+    CRITICAL rescues (15–45 min of work) wait the *longest* (251 min) and short ROUTINE kits the shortest (84).
+  - With nice −5 / 0 / +5, the weights are 3121 / 1024 / 335, so a CRITICAL thread gets about 9× the share
+    of a ROUTINE one. That halves the CRITICAL wait (251 → 129) and more than doubles the ROUTINE wait
+    (84 → 201).
+  - It is still far from strict priority (CRITICAL waits 23–36 min), because ROUTINE threads keep
     getting their share.
+- **Method note:** in an earlier run without the capability, the creating thread was itself an ordinary
+  fair-class thread. There the fair modes showed responses of only 0.1–0.5 simulated minutes, because
+  waking the creator tended to hand the CPU straight to the newly created thread. The wait results
+  were the same within noise (CRITICAL 237 / 120). How a thread is created changes its first-run latency
+  under EEVDF, which is why all four modes above use the same privileged creator.
 
 ### What SCHED_FIFO does to low priorities
-Not measured yet: this account has no `CAP_SYS_NICE`. This section will be completed with the `fifo`
-and `rr` rows above once `sudo setcap cap_sys_nice+ep build/linuxsched` has been run and `make e2` rerun.
-The question it answers: SCHED_FIFO is strict priority with no time slicing. A thread runs until it
-blocks, yields or is preempted by a higher real-time priority, so lower priorities get the CPU only when
-no higher one is runnable. SCHED_RR adds a 100 ms time slice, but only among threads of the *same*
-priority. RT throttling reserves 5% of each second for non-real-time tasks, not for lower real-time
-priorities.
+- **CRITICAL threads (priority 30) run the instant they arrive** (response 0.0) and are never preempted by
+  lower priorities, so their wait (23.4) is the lowest of every variant.
+- **Lower priorities run only when no higher real-time thread is runnable.** URGENT threads wait on
+  average 65 simulated minutes before their *first* instruction (409 at worst), ROUTINE threads 198 (900 at
+  worst): 23 of 60 ROUTINE threads waited over 2 simulated hours just to start. Under a longer stream of
+  CRITICAL work they would never run at all, which is classic starvation. RT throttling (95%) reserves
+  time only for *non-real-time* tasks, not for lower real-time priorities.
+- **SCHED_RR is almost the same,** because its 100 ms time slice (25 simulated minutes) only rotates
+  threads of *equal* priority. That rotation is visible in one place: CRITICAL wait rises from 23.4 to 31.7
+  when long CRITICAL rescues take turns instead of running to completion.
+- **Our simulator predicts this:** Linux `fifo` (23 / 93 / 210) matches sim `prio` preemptive
+  (27 / 96 / 248) closely. The simulation preempts only at minute boundaries, and Linux preempts
+  immediately, which is why Linux is slightly better for CRITICAL.
 
 ### How close our MLFQ gets
-- **Response:** MLFQ gives a much better response than textbook priority (16 / 51 / 100 vs 27–36 / 89–94 / 240).
-  It is nowhere near the fair class, where everyone starts within about a minute.
-- **Wait:** MLFQ's pattern resembles `cfs-flat`, not priority: CRITICAL waits longest (184 vs 237 in
-  `cfs-flat`), while URGENT and ROUTINE are close (123/129 vs 132/77). At 90% load, aging and demotion
+- **Response:** MLFQ gives a much better response than textbook priority for URGENT and ROUTINE
+  (51 / 100 vs 89–94 / 240), and starts CRITICAL work within 16 min. It is nowhere near Linux FIFO for
+  CRITICAL (0) or the fair class for everyone (1–3.5).
+- **Wait:** MLFQ's pattern resembles `cfs-flat`, not priority: CRITICAL waits longest (184 vs 251 in
+  `cfs-flat`), while URGENT and ROUTINE are close (123 / 129 vs 143 / 84). At 90% load, aging and demotion
   turn MLFQ into something close to fair sharing, which is the same effect E1 found.
-- **Overall:** of the variants measured so far, `cfs-nice` is the most balanced: the lowest CRITICAL
-  wait outside strict priority, and nobody starves. Strict priority (sim `prio`) remains the only way to
-  keep CRITICAL waits around half an hour (27–36 min), and it pays with ROUTINE starvation.
+- **Overall:** Linux offers both extremes. FIFO is strict priority (best for CRITICAL, starves the rest);
+  the fair class with nice is proportional share (nobody starves, CRITICAL still waits two hours). Our
+  MLFQ sits between them but closer to fair sharing.
+- **For relief triage:** run life-critical work as real-time FIFO, cap it so it cannot monopolise the
+  CPU (which RT throttling only partly does), and give the rest weighted fair sharing. That is the
+  design Linux itself uses.
 
 ## Baseline (Phase 2 step 2)
 `schedsim --teams 3` on `scenarios/flood_pune.csv` (200 requests in 360 min, permanently overloaded). The
