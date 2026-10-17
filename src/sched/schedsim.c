@@ -8,7 +8,10 @@
  *
  *   schedsim --policy fcfs|sjf|srtf|rr|prio|mlfq --scenario scenarios/flood_pune.csv --teams 3
  *            [--quantum Q] [--preemptive on|off] [--age MIN] [--seed S] [--starve MIN]
- *            [--csv out.csv] [--gantt]
+ *            [--csv out.csv] [--gantt] [--summary-csv runs.csv] [--label NAME]
+ *
+ * --summary-csv appends one row of metrics per run (header written once), which is what
+ * the experiment scripts (experiments/run_e1.sh) collect.
  *
  * MLFQ promotions (aging) are logged one per line on stderr; the report shows the number
  * of promotions and demotions.
@@ -67,9 +70,51 @@ static void usage(FILE *out, const char *prog)
             "              (default %d)\n"
             "  --csv       write per-request results (id,camp,severity,arrival,burst,start,\n"
             "              finish,wait,turnaround,response) to FILE\n"
-            "  --gantt     print a Gantt chart of the first %d minutes per team\n",
+            "  --gantt     print a Gantt chart of the first %d minutes per team\n"
+            "  --summary-csv FILE  append one row of run metrics to FILE (header if new)\n"
+            "  --label NAME        name of this variant in the summary row (default: policy)\n",
             prog, sched_policy_names(), DEFAULT_SCENARIO, DEFAULT_TEAMS, DEFAULT_QUANTUM,
             SCHED_DEFAULT_AGE, DEFAULT_STARVE, GANTT_MINUTES);
+}
+
+/* Append one CSV row of run metrics to path, with a header if the file is new or empty. */
+static int write_summary(const char *path, const char *label, const sched_policy_t *p,
+                         const char *scenario, const sim_config_t *cfg, long age,
+                         const sim_metrics_t *m, const event_counts_t *ev)
+{
+    static const char *const sev[SIM_SEVERITIES] = { "critical", "urgent", "routine" };
+    FILE *f = fopen(path, "a");
+    long size;
+
+    if (!f) {
+        fprintf(stderr, "cannot write %s: %s\n", path, strerror(errno));
+        return -1;
+    }
+    fseek(f, 0, SEEK_END);
+    size = ftell(f);
+    if (size == 0) {
+        fprintf(f, "label,policy,preemptive,teams,quantum,age,seed,scenario,requests,completed,"
+                   "avg_wait,avg_turnaround,avg_response,max_wait,starve_threshold,starved,"
+                   "throughput_per_hour,utilisation,context_switches,promotions,demotions,makespan");
+        for (int s = 0; s < SIM_SEVERITIES; s++)
+            fprintf(f, ",%s_n,%s_avg_wait,%s_avg_response,%s_max_wait", sev[s], sev[s], sev[s], sev[s]);
+        fprintf(f, "\n");
+    }
+    fprintf(f, "%s,%s,%d,%d,%d,%ld,%llu,%s,%zu,%zu,%.3f,%.3f,%.3f,%lld,%lld,%zu,%.3f,%.4f,%lu,%lu,%lu,%lld",
+            label, p->name, p->preemptive, cfg->teams, cfg->quantum, age,
+            cfg->seed_set ? (unsigned long long)cfg->seed : 0ULL, scenario, m->jobs, m->completed,
+            m->all.avg_wait, m->all.avg_turnaround, m->all.avg_response, (long long)m->all.max_wait,
+            (long long)cfg->starve_threshold, m->starved, m->throughput_per_hour, m->utilisation,
+            m->context_switches, ev->promotions, ev->demotions, (long long)m->makespan);
+    for (int s = 0; s < SIM_SEVERITIES; s++)
+        fprintf(f, ",%zu,%.3f,%.3f,%lld", m->sev[s].n, m->sev[s].avg_wait, m->sev[s].avg_response,
+                (long long)m->sev[s].max_wait);
+    fprintf(f, "\n");
+    if (fclose(f) != 0) {
+        fprintf(stderr, "cannot write %s: %s\n", path, strerror(errno));
+        return -1;
+    }
+    return 0;
 }
 
 static int parse_long(const char *s, long min, long max, long *out)
@@ -98,10 +143,13 @@ int main(int argc, char **argv)
         { "starve",   required_argument, NULL, 'w' },
         { "csv",      required_argument, NULL, 'c' },
         { "gantt",    no_argument,       NULL, 'g' },
+        { "summary-csv", required_argument, NULL, 'u' },
+        { "label",    required_argument, NULL, 'l' },
         { "help",     no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
     const char *policy_name = NULL, *scenario = DEFAULT_SCENARIO, *csv = NULL;
+    const char *summary = NULL, *label = NULL;
     sim_config_t cfg = { DEFAULT_TEAMS, DEFAULT_QUANTUM, DEFAULT_STARVE, 0, 0, 0 };
     sched_params_t params;
     event_counts_t events = { 0, 0 };
@@ -115,12 +163,14 @@ int main(int argc, char **argv)
     int gantt = 0, opt, rc = 1;
     long v;
 
-    while ((opt = getopt_long(argc, argv, "p:f:n:q:P:a:s:w:c:gh", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "p:f:n:q:P:a:s:w:c:gu:l:h", opts, NULL)) != -1) {
         switch (opt) {
         case 'p': policy_name = optarg; break;
         case 'f': scenario = optarg; break;
         case 'c': csv = optarg; break;
         case 'g': gantt = 1; break;
+        case 'u': summary = optarg; break;
+        case 'l': label = optarg; break;
         case 'n':
             if (parse_long(optarg, 1, 64, &v) == -1) {
                 fprintf(stderr, "invalid --teams (1-64): %s\n", optarg);
@@ -216,6 +266,9 @@ int main(int argc, char **argv)
         printf("\n");
         sim_print_gantt(stdout, &trace);
     }
+    if (summary && write_summary(summary, label ? label : policy_name, policy, scenario, &cfg,
+                                 age, &m, &events) == -1)
+        goto out;
     if (csv) {
         if (sim_write_jobs_csv(csv, jobs, n) == -1)
             goto out;

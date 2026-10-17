@@ -6,6 +6,8 @@
 #   make tsan       ThreadSanitizer build in build/tsan/ + tests
 #   make valgrind   tests with reliefd and camps under valgrind
 #   make run        run reliefd in the foreground (RELIEF_HOME=./run)
+#   make e1         experiment E1: policy comparison -> experiments/results/e1.csv + PNGs
+#                   (figures also copied to docs/figures/e1/ for EXPERIMENTS.md)
 
 CC       ?= gcc
 BUILD    ?= build
@@ -50,7 +52,7 @@ VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
 # $(call run_tests,ENV...) runs every test script with the given environment.
 run_tests = for t in $(TESTS); do echo "== $$t"; $(1) $$t || exit 1; done
 
-.PHONY: all reliefd camp reliefstat schedsim clean run test tsan valgrind
+.PHONY: all reliefd camp reliefstat schedsim clean run test tsan valgrind e1
 
 all: reliefd camp reliefstat schedsim $(BUILD)/shm_die_locked $(BUILD)/test_sched
 
@@ -95,6 +97,14 @@ tsan:
 
 valgrind: all
 	$(call run_tests,BIN_DIR=$(BUILD) RELIEF_WRAP="$(VALGRIND)" TEST_TIMEOUT=30 PHASE1_CAMPS=2)
+
+# Experiment E1 (deterministic: same seeds -> identical CSV). Plotting needs matplotlib.
+E1_FIGS := e1_wait_by_severity.png e1_critical_response.png e1_starved.png e1_worst_wait.png
+e1: schedsim
+	experiments/run_e1.sh
+	python3 -I experiments/plot_e1.py
+	@mkdir -p docs/figures/e1
+	cp $(addprefix experiments/results/,$(E1_FIGS)) docs/figures/e1/
 
 clean:
 	rm -rf build

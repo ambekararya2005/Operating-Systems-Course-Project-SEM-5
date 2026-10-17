@@ -43,6 +43,7 @@ make test            # tests/sched.sh (textbook FCFS/SJF/SRTF/RR/prio/MLFQ unit 
                      # tests/dispatch.sh (live rescue-team threads: dispatch, preemption, aging)
 make tsan            # ThreadSanitizer build (build/tsan/) + tests
 make valgrind        # tests under valgrind (camps too)
+make e1              # experiment E1: 8 scheduling variants x 5 seeds -> experiments/results/e1.csv + graphs
 make clean
 ```
 

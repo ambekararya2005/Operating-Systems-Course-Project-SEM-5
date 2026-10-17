@@ -13,7 +13,9 @@ byte-identical file. scenarios/flood_pune.csv is produced by the defaults:
 Model:
   - Severity mix uses exact quotas (default 15% CRITICAL / 35% URGENT / 50% ROUTINE), shuffled.
   - Arrivals form a Poisson process over --duration simulated minutes with a flood peak:
-    the rate is 3x higher in the middle third of the window.
+    the rate is 3x higher in the middle third of the window. With --rush START-END the
+    peak is replaced by a rush hour: the rate is --rush-factor times higher (default 10)
+    inside [START, END) and the base rate everywhere else (used by experiment E1).
   - Camps on the Mula-Mutha flood plain (see scenarios/camps.conf) get more requests.
   - Resource, quantity and service time depend on severity (rescue and boats are
     critical, hygiene kits routine).
@@ -66,7 +68,19 @@ def arrivals(rng, rows, duration):
     return sorted(min(int(t), duration - 1) for t in times)
 
 
-def generate(rows, camps, seed, duration, pct):
+def rush_arrivals(rng, rows, duration, start, end, factor):
+    """Sorted arrival minutes: rate `factor` inside [start, end), rate 1 elsewhere."""
+    segs = [(0, start, 1.0), (start, end, factor), (end, duration, 1.0)]
+    segs = [s for s in segs if s[1] > s[0]]
+    weights = [(hi - lo) * rate for lo, hi, rate in segs]
+    times = []
+    for _ in range(rows):
+        lo, hi, _rate = rng.choices(segs, weights=weights)[0]
+        times.append(lo + rng.random() * (hi - lo))
+    return sorted(min(int(t), duration - 1) for t in times)
+
+
+def generate(rows, camps, seed, duration, pct, rush=None, rush_factor=10.0):
     rng = random.Random(seed)
     camp_ids = list(range(1, camps + 1))
     camp_w = [CAMP_WEIGHTS.get(c, 1.0) for c in camp_ids]
@@ -80,7 +94,9 @@ def generate(rows, camps, seed, duration, pct):
     rng.shuffle(camp_of)
 
     out = []
-    for arrival, camp, sev in zip(arrivals(rng, rows, duration), camp_of, severities):
+    times = (rush_arrivals(rng, rows, duration, rush[0], rush[1], rush_factor) if rush
+             else arrivals(rng, rows, duration))
+    for arrival, camp, sev in zip(times, camp_of, severities):
         names, w = zip(*RESOURCE_MIX[sev])
         res = rng.choices(names, weights=w)[0]
         (qlo, qhi), (slo, shi) = RESOURCE_PARAMS[res]
@@ -97,6 +113,11 @@ def main():
                     help="scenario length in simulated minutes (default 360)")
     ap.add_argument("--mix", default="15,35,50",
                     help="CRITICAL,URGENT,ROUTINE percentages (default 15,35,50)")
+    ap.add_argument("--rush", metavar="START-END",
+                    help="rush hour: arrivals --rush-factor times denser in [START, END) minutes "
+                         "(replaces the default mid-window flood peak)")
+    ap.add_argument("--rush-factor", type=float, default=10.0,
+                    help="arrival-rate multiplier inside the rush hour (default 10)")
     ap.add_argument("-o", "--output", help="output file (default stdout)")
     args = ap.parse_args()
 
@@ -106,7 +127,17 @@ def main():
     if args.rows < args.camps or args.camps < 1 or args.duration < 1:
         ap.error("need rows >= camps >= 1 and duration >= 1")
 
-    rows = generate(args.rows, args.camps, args.seed, args.duration, pct)
+    rush = None
+    if args.rush:
+        try:
+            start, end = (int(x) for x in args.rush.split("-"))
+        except ValueError:
+            ap.error("--rush needs START-END in whole minutes, e.g. 60-120")
+        if not 0 <= start < end <= args.duration or args.rush_factor <= 0:
+            ap.error("--rush must satisfy 0 <= START < END <= --duration, with --rush-factor > 0")
+        rush = (start, end)
+
+    rows = generate(args.rows, args.camps, args.seed, args.duration, pct, rush, args.rush_factor)
     lines = ["arrival_min,camp_id,severity,resource,quantity,service_time"]
     lines += [",".join(str(v) for v in r) for r in rows]
     text = "\n".join(lines) + "\n"

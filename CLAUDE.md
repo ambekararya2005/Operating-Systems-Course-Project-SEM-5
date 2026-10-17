@@ -40,8 +40,8 @@ Layout (folders marked * are created in later phases):
 - `systemd/`: `reliefd.service` template (not installed until Phase 6)
 - `docs/`: ARCHITECTURE.md, EXPERIMENTS.md
 - `kernel/`*: relief.ko, self-contained with its own Makefile
-- `experiments/`: `gen_scenario.py` (seeded scenario generator, stdlib only) and, later, experiment drivers.
-  `experiments/results/` holds the CSV output (git-ignored)
+- `experiments/`: `gen_scenario.py` (seeded generator, `--rush` option), `run_e1.sh` + `plot_e1.py` (E1). Output in
+  `experiments/results/` (git-ignored); figures for docs are copied to `docs/figures/` (committed)
 - `build/`: binaries (`build/tsan/` for TSan). `run/`: default `$RELIEF_HOME`. Both are git-ignored
 - `$RELIEF_HOME/logs/`: `reliefd.log` is the structured key=value log
   (`ts= level= comp= pid= event= ...`, parse it with awk); `reliefd.out` holds the raw stderr of reliefd and
@@ -90,7 +90,7 @@ Layout (folders marked * are created in later phases):
   being loaded.
 
 ## Commands
-- `make` / `make test` / `make tsan` (under `setarch -R`: GCC 13 TSan vs WSL2 ASLR) / `make valgrind` / `make clean`
+- `make [test|tsan|valgrind|clean|e1]`: tsan runs under `setarch -R` (GCC 13 vs WSL2 ASLR); e1 plots need `python3-matplotlib`
 - `scripts/reliefctl start|stop|status [--json]|sched [--json]|ps|tree`, `alert|dump <id|all>` (SIGUSR1: next 5 requests CRITICAL;
   SIGUSR2: counters), `report [--since MIN] [--last-run]` (incl. scheduler per-severity waits), `simulate flood
   [--camps N --seed S --rows R --time-scale MS --policy P --teams T]` (run until all BYE + all RESCUE served,
@@ -101,7 +101,7 @@ Layout (folders marked * are created in later phases):
   `--camps /dev/null` for no camps. `--time-scale` is the real ms per simulated minute (default 100; 0 = no pacing)
 - `build/camp --id N --scenario F [--time-scale MS]` (paced, then resident), `--id N --count N --seed S`, `--shutdown`
 - `build/schedsim --policy fcfs|sjf|srtf|rr|prio|mlfq [--scenario F --teams N --quantum Q --preemptive on|off
-  --age MIN --seed S --starve MIN --csv F --gantt]` (offline, deterministic; MLFQ promotions on stderr)
+  --age MIN --seed S --starve MIN --csv F --gantt --summary-csv F --label L]` (offline, deterministic)
 - `python3 experiments/gen_scenario.py [--rows N --camps N --seed S --duration MIN --mix C,U,R] [-o FILE]`
 - The queue `/reliefos_requests` and shm `/reliefos_status` are system-wide: only one reliefd at a time
 
@@ -116,5 +116,5 @@ Layout (folders marked * are created in later phases):
 Work the phases in order. Within a phase, ship all P0 features before any P1/P2.
 
 ## Current status
-Phase 1 complete (gate M1). Phase 2: steps 1-2 done (scheduler module, 6 policies, `schedsim`, textbook tests);
-step 3 done (live rescue-team threads in reliefd, `reliefctl sched`). Next: experiments E1/E2.
+Phase 1 complete (gate M1). Phase 2: steps 1-4 done (scheduler + 6 policies, `schedsim`, live teams in reliefd,
+E1: hypothesis not supported, see docs/EXPERIMENTS.md). Next: E2. Update as steps complete.
