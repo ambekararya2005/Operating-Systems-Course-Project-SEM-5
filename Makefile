@@ -1,10 +1,11 @@
 # ReliefOS build. Binaries go to $(BUILD)/ (default build/).
-#   make            build reliefd, camp, reliefstat, schedsim, linuxsched (+ test helpers)
+#   make            build reliefd, camp, reliefstat, schedsim, linuxsched, racelab (+ test helpers)
 #   make test       tests/{smoke,camps,traffic,signals,status,cli}.sh + phase1_smoke.sh (gate M1)
 #                   + tests/sched.sh (build/test_sched unit tests, schedsim)
 #                   + tests/dispatch.sh (reliefd rescue-team threads, live scheduling)
 #                   + tests/linuxsched.sh (real Linux scheduling classes, watchdog)
 #                   + tests/phase2_check.sh (gate M2: every policy consistent and deterministic)
+#                   + tests/racelab.sh (critical section: Peterson, mutex, spinlock, semaphore)
 #   make tsan       ThreadSanitizer build in build/tsan/ + tests
 #   make valgrind   tests with reliefd and camps under valgrind
 #   make run        run reliefd in the foreground (RELIEF_HOME=./run)
@@ -13,6 +14,9 @@
 #   make e2         experiment E2: real Linux scheduling (CFS/EEVDF+nice, FIFO, RR) vs simulated
 #                   prio/mlfq -> experiments/results/e2_*.csv + PNGs (copied to docs/figures/e2/).
 #                   fifo/rr need: sudo setcap cap_sys_nice+ep build/linuxsched
+#   make e4         experiment E4: critical-section protection, every racelab mode x 10 runs ->
+#                   experiments/results/e4.csv + PNGs (copied to docs/figures/e4/), and the
+#                   strace futex counts in docs/strace_futex.txt
 
 CC       ?= gcc
 BUILD    ?= build
@@ -42,6 +46,8 @@ SCHEDSIM_SRC := src/sched/schedsim.c $(SCHED_SRC)
 SCHEDSIM_OBJ := $(SCHEDSIM_SRC:%.c=$(OBJ)/%.o)
 LINUXSCHED_SRC := src/linuxsched/main.c $(SCHED_SRC)
 LINUXSCHED_OBJ := $(LINUXSCHED_SRC:%.c=$(OBJ)/%.o)
+RACELAB_SRC := src/racelab/main.c
+RACELAB_OBJ := $(RACELAB_SRC:%.c=$(OBJ)/%.o)
 TEST_SCHED_SRC := tests/test_sched.c $(SCHED_SRC)
 TEST_SCHED_OBJ := $(TEST_SCHED_SRC:%.c=$(OBJ)/%.o)
 # Test helpers (built with the programs, used by tests/*.sh).
@@ -49,7 +55,8 @@ SHM_DIE_SRC := tests/helpers/shm_die_locked.c src/common/shm.c
 SHM_DIE_OBJ := $(SHM_DIE_SRC:%.c=$(OBJ)/%.o)
 
 TESTS := tests/smoke.sh tests/camps.sh tests/traffic.sh tests/signals.sh tests/status.sh tests/cli.sh \
-         tests/phase1_smoke.sh tests/sched.sh tests/dispatch.sh tests/linuxsched.sh tests/phase2_check.sh
+         tests/phase1_smoke.sh tests/sched.sh tests/dispatch.sh tests/linuxsched.sh tests/phase2_check.sh \
+         tests/racelab.sh
 
 # --trace-children: camps exec'd by reliefd also run under valgrind.
 VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
@@ -59,15 +66,16 @@ VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
 # $(call run_tests,ENV...) runs every test script with the given environment.
 run_tests = for t in $(TESTS); do echo "== $$t"; $(1) $$t || exit 1; done
 
-.PHONY: all reliefd camp reliefstat schedsim linuxsched clean run test tsan valgrind e1 e2
+.PHONY: all reliefd camp reliefstat schedsim linuxsched racelab clean run test tsan valgrind e1 e2 e4
 
-all: reliefd camp reliefstat schedsim linuxsched $(BUILD)/shm_die_locked $(BUILD)/test_sched
+all: reliefd camp reliefstat schedsim linuxsched racelab $(BUILD)/shm_die_locked $(BUILD)/test_sched
 
 reliefd: $(BUILD)/reliefd
 camp: $(BUILD)/camp
 reliefstat: $(BUILD)/reliefstat
 schedsim: $(BUILD)/schedsim
 linuxsched: $(BUILD)/linuxsched
+racelab: $(BUILD)/racelab
 
 $(BUILD)/reliefd: $(RELIEFD_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
@@ -85,6 +93,9 @@ $(BUILD)/schedsim: $(SCHEDSIM_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/linuxsched: $(LINUXSCHED_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/racelab: $(RACELAB_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/test_sched: $(TEST_SCHED_OBJ)
@@ -126,8 +137,17 @@ e2: linuxsched schedsim
 	@mkdir -p docs/figures/e2
 	cp $(addprefix experiments/results/,$(E2_FIGS)) docs/figures/e2/
 
+# Experiment E4 (real threads: the racy modes' errors and all runtimes vary between runs).
+E4_FIGS := e4_error.png e4_runtime.png
+e4: racelab
+	experiments/run_e4.sh
+	python3 -I experiments/plot_e4.py
+	@mkdir -p docs/figures/e4
+	cp $(addprefix experiments/results/,$(E4_FIGS)) docs/figures/e4/
+
 clean:
 	rm -rf build
 
 -include $(RELIEFD_OBJ:.o=.d) $(CAMP_OBJ:.o=.d) $(RELIEFSTAT_OBJ:.o=.d) $(SHM_DIE_OBJ:.o=.d) \
-         $(SCHEDSIM_OBJ:.o=.d) $(TEST_SCHED_OBJ:.o=.d) $(LINUXSCHED_OBJ:.o=.d)
+         $(SCHEDSIM_OBJ:.o=.d) $(TEST_SCHED_OBJ:.o=.d) $(LINUXSCHED_OBJ:.o=.d) \
+         $(RACELAB_OBJ:.o=.d)

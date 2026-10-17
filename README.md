@@ -40,12 +40,15 @@ make test            # tests/sched.sh (textbook FCFS/SJF/SRTF/RR/prio/MLFQ unit 
                      # tests/signals.sh (alert, dump, graceful SIGTERM),
                      # tests/status.sh (shared-memory status table, robust mutex recovery),
                      # tests/cli.sh (reliefctl ps/tree/report/simulate, stockcheck.sh),
-                     # tests/dispatch.sh (live rescue-team threads: dispatch, preemption, aging)
+                     # tests/dispatch.sh (live rescue-team threads: dispatch, preemption, aging),
+                     # tests/racelab.sh (critical section: Peterson, mutex, spinlock, semaphore)
 make tsan            # ThreadSanitizer build (build/tsan/) + tests
 make valgrind        # tests under valgrind (camps too)
 make e1              # experiment E1: 9 variants x 5 seeds + E1b load sweep -> experiments/results/e1*.csv + graphs
 make e2              # experiment E2: real threads under CFS/EEVDF+nice, SCHED_FIFO, SCHED_RR vs simulated
                      #   (fifo/rr first: sudo setcap cap_sys_nice+ep build/linuxsched)
+make e4              # experiment E4: every racelab mode x 10 runs -> experiments/results/e4.csv + graphs,
+                     #   plus strace futex counts in docs/strace_futex.txt (sudo apt install strace)
 make clean
 ```
 
@@ -110,6 +113,17 @@ On the flood scenario with 3 teams (`schedsim --policy P --teams 3`):
 | prio `--preemptive on` | 520.3 | 28.6 | 164 | 195 |
 | mlfq | 464.6 | 525.3 | 180 | 502 |
 
+### Critical section: racelab
+Two camps (threads) share one boat and both add N to one inventory counter (read, modify, write):
+```sh
+build/racelab --mode none               # race condition: about 44% of 2,000,000 updates lost
+build/racelab --mode peterson-nofence   # textbook Peterson: loses a few dozen on x86 (store buffers)
+build/racelab --mode peterson           # with a seq_cst fence: always 2,000,000
+build/racelab --mode mutex|spinlock|semaphore [--iters N] [--threads 1] [--csv F]
+strace -f -e trace=futex -c build/racelab --mode mutex   # futex calls only under contention
+```
+Results and the explanation are in E4 in `docs/EXPERIMENTS.md`.
+
 ### Scenarios
 `scenarios/flood_pune.csv` holds 200 requests across the 8 camps: 15% CRITICAL, 35% URGENT and 50% ROUTINE,
 with arrivals over 6 simulated hours and a peak in the middle. It is generated, and the same seed gives a
@@ -159,7 +173,8 @@ run it every 10 minutes, add this with `crontab -e`:
 | 2 | FCFS, SJF, RR, Priority, MLFQ with aging | Triage scheduler (`src/sched/`, pluggable policies, `schedsim`), experiment E1 | 2 |
 | 2 | Traditional/modern UNIX scheduling: nice, SCHED_FIFO/SCHED_RR, CFS/EEVDF | `build/linuxsched`: real threads on one pinned CPU, experiment E2 | 2 |
 | 2, 3 | Threads (pthreads), mutex + condition variable | reliefd's rescue-team threads and clock thread share one ready queue (`src/reliefd/dispatch.c`) | 2 |
-| 3 | Producer-consumer, readers-writers, Peterson's | Warehouse → truck, inventory, two camps / one boat | 3 |
+| 3 | Critical section, Peterson's solution, mutex, TAS spinlock, semaphores, futex | `build/racelab`: two camps / one boat / one counter, experiment E4, strace of futex | 3 |
+| 3 | Producer-consumer, readers-writers | Warehouse → truck, inventory | 3 |
 | 3 | Banker's, wait-for-graph detection + recovery, resource ordering | Deadlock control over trucks/boats | 3 |
 | 4 | First/best/worst fit, buddy system, slab allocator | Warehouse space, pre-packed relief kits | 4 |
 | 4 | FIFO/LRU/Optimal replacement, thrashing | Perishable stock (plus expiry-first) | 4 |

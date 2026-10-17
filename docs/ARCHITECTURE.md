@@ -315,6 +315,27 @@ Thread model of reliefd:
   arrival order, CRITICAL preempts ROUTINE under `prio --preemptive on`, MLFQ aging promotes a
   starving job, and stopping abandons queued work cleanly. It fails on any ThreadSanitizer report.
 
+## Phase 3: critical section (`src/racelab/`)
+`build/racelab` is a standalone program with no IPC: two threads, "camps", share one counter, "the
+boat's inventory". Each entry/exit section sits behind a `lock_ops_t` (`init`, `lock(self)`,
+`unlock(self)`, `destroy`), so `--mode` swaps the protocol without touching the increment loop:
+
+| Mode | Mechanism | Kernel involvement |
+|------|-----------|--------------------|
+| `none` | none | none |
+| `peterson-nofence` | flag[2] + turn, plain volatile ints | none (fails on x86: store buffers reorder store → load) |
+| `peterson` | flag[2] + turn as C11 atomics, `atomic_thread_fence(seq_cst)` after the stores | none |
+| `spinlock` | `atomic_flag_test_and_set` (XCHG), `pause` while spinning | none |
+| `mutex` | `pthread_mutex_t` (glibc: CAS in user space, futex wait/wake when contended) | futex, only under contention |
+| `semaphore` | `sem_init(&s, 0, 1)`, `sem_wait` / `sem_post` | futex, only under contention |
+
+- **Counter:** `volatile`, so each increment is a real load and store that the compiler cannot merge.
+- **Start:** a `pthread_barrier_t` releases both threads together.
+- **ThreadSanitizer:** `none` and `peterson-nofence` race on purpose, so `tests/racelab.sh` skips them under
+  TSan. `peterson` uses release/acquire on the flags in addition to the fence. TSan does not model
+  fences, and release/acquire gives it the happens-before edge it needs.
+- **Results:** experiment E4 in EXPERIMENTS.md. `docs/strace_futex.txt` has the futex counts.
+
 ## Structured log (`$RELIEF_HOME/logs/reliefd.log`)
 One event per line: `ts=<iso8601> level=<lvl> comp=reliefd pid=<pid> event=<name> key=value ...`.
 Values contain no spaces, except `msg="..."` on free-form `event=log` lines. Events include
