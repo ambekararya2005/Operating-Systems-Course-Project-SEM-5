@@ -33,7 +33,7 @@ sudo apt install build-essential valgrind shellcheck
 ## Build, run, test
 ```sh
 make                 # builds build/reliefd and build/camp
-make test            # tests/sched.sh (scheduler unit tests incl. textbook FCFS, schedsim),
+make test            # tests/sched.sh (textbook FCFS/SJF/SRTF/RR/prio/MLFQ unit tests, all policies),
                      # tests/smoke.sh (IPC, reliefctl), tests/camps.sh (fork/exec, restarts, no zombies),
                      # tests/traffic.sh (200-row paced replay, queue-full retries),
                      # tests/signals.sh (alert, dump, graceful SIGTERM),
@@ -77,7 +77,21 @@ build/schedsim --policy fcfs --scenario scenarios/flood_pune.csv --teams 3 --gan
 It reports the average waiting, turnaround and response time (overall and per severity), the worst-case
 wait, throughput, team utilisation, context switches and starved requests (wait > `--starve`, default
 120 min). `--gantt` draws the first 60 minutes per team, and `--csv` writes one row per request.
-Policies so far: `fcfs`. SJF, RR, Priority and MLFQ come next in Phase 2.
+Policies: `fcfs`, `sjf`, `srtf`, `rr` (`--quantum`, default 10), `prio` (by severity, `--preemptive on|off`)
+and `mlfq` (3 queues, quanta 8/16/FCFS, aging after `--age` minutes, default 60; every promotion is logged on
+stderr). `build/test_sched` prints a textbook Gantt chart for each unit test.
+
+On the flood scenario with 3 teams (`schedsim --policy P --teams 3`):
+
+| Policy | Avg wait (min) | CRITICAL avg wait | Starved (> 120 min) | Context switches |
+|--------|---------------:|------------------:|--------------------:|-----------------:|
+| fcfs | 401.9 | 382.8 | 166 | 195 |
+| sjf | 192.9 | 415.6 | 76 | 195 |
+| srtf | 189.6 | 412.2 | 76 | 227 |
+| rr | 420.2 | 659.4 | 158 | 428 |
+| prio | 514.7 | 32.5 | 161 | 195 |
+| prio `--preemptive on` | 520.3 | 28.6 | 164 | 195 |
+| mlfq | 464.6 | 525.3 | 180 | 502 |
 
 ### Scenarios
 `scenarios/flood_pune.csv` holds 200 requests across the 8 camps: 15% CRITICAL, 35% URGENT and 50% ROUTINE,

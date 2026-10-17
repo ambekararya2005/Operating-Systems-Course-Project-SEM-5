@@ -110,13 +110,17 @@ int sim_run(sched_policy_t *p, sched_job_t *jobs, size_t n, const sim_config_t *
         order[i].tie = cfg->seed_set ? splitmix64(cfg->seed ^ jobs[i].id) : (uint64_t)i;
     }
     qsort(order, n, sizeof *order, arrival_cmp);
+    for (size_t i = 0; i < n; i++)
+        order[i].job->seq = i;      /* arrival order: the FCFS tie-break for every policy */
 
     while (done < n) {
         int busy_any = 0;
 
         /* 1. arrivals */
         while (next < n && order[next].job->arrival <= t) {
-            p->enqueue(p, order[next++].job, t);
+            sched_job_t *j = order[next++].job;
+            j->ready_since = t;
+            p->enqueue(p, j, t);
             ready++;
         }
 
@@ -130,6 +134,7 @@ int sim_run(sched_policy_t *p, sched_job_t *jobs, size_t n, const sim_config_t *
                     running[i] = NULL;
                     last_end[i] = t;
                     j->team = -1;
+                    j->ready_since = t;
                     p->enqueue(p, j, t);
                     ready++;
                 }
@@ -152,6 +157,7 @@ int sim_run(sched_policy_t *p, sched_job_t *jobs, size_t n, const sim_config_t *
             last_job[i] = j;
             if (j->start < 0)
                 j->start = t;
+            j->slice = 0;           /* a fresh quantum on every dispatch */
             j->team = i;
             running[i] = j;
         }
@@ -165,6 +171,7 @@ int sim_run(sched_policy_t *p, sched_job_t *jobs, size_t n, const sim_config_t *
             if (trace && t < trace->minutes)
                 trace->cell[(size_t)i * (size_t)trace->minutes + (size_t)t] = j;
             j->remaining--;
+            j->slice++;
             j->last_run = t + 1;
             m->busy++;
             if (j->remaining <= 0) {
@@ -356,6 +363,61 @@ void sim_print_gantt(FILE *out, const sim_trace_t *tr)
         }
         fprintf(out, "\n");
     }
+}
+
+#define GANTT_WRAP 100
+
+static void flush_rows(FILE *out, char *bar, size_t *bl, char *axis, size_t *al, int64_t end)
+{
+    bar[(*bl)++] = '|';
+    bar[*bl] = '\0';
+    snprintf(axis + *al, 24, "%lld", (long long)end);
+    fprintf(out, "  %s\n  %s\n", bar, axis);
+    *bl = 0;
+    *al = 0;
+}
+
+void sim_print_gantt_labeled(FILE *out, const sim_trace_t *tr, int team, int from, int to,
+                             sim_label_fn label, int cols_per_min)
+{
+    char bar[GANTT_WRAP + 128], axis[GANTT_WRAP + 128];
+    size_t bl = 0, al = 0;
+    int t;
+
+    if (to > tr->minutes)
+        to = tr->minutes;
+    if (cols_per_min < 1)
+        cols_per_min = 1;
+    t = from;
+    while (t < to) {
+        const sched_job_t *j = tr->cell[(size_t)team * (size_t)tr->minutes + (size_t)t];
+        int s = t;
+        char num[24], text[64];
+        size_t w, minw, lab;
+
+        while (t < to && tr->cell[(size_t)team * (size_t)tr->minutes + (size_t)t] == j)
+            t++;
+        snprintf(text, sizeof text, "%s", j ? label(j) : "");
+        snprintf(num, sizeof num, "%d", s);
+        lab = strlen(text);
+        minw = (lab > strlen(num) ? lab : strlen(num)) + 2;
+        w = (size_t)(t - s) * (size_t)cols_per_min;
+        if (w < minw)
+            w = minw;
+        if (bl + w + 1 > GANTT_WRAP && bl > 0)
+            flush_rows(out, bar, &bl, axis, &al, s);
+
+        /* bar: "|" then the label centred in w-1 columns ('.' fill when idle) */
+        bar[bl++] = '|';
+        for (size_t k = 0; k < w - 1; k++) {
+            size_t pad = (w - 1 - lab) / 2;
+            bar[bl++] = j ? (k >= pad && k < pad + lab ? text[k - pad] : ' ') : '.';
+        }
+        /* axis: the start time under the "|", padded to the segment width */
+        al += (size_t)snprintf(axis + al, sizeof axis - al, "%-*s", (int)w, num);
+    }
+    if (bl > 0)
+        flush_rows(out, bar, &bl, axis, &al, t);
 }
 
 int sim_write_jobs_csv(const char *path, const sched_job_t *jobs, size_t n)

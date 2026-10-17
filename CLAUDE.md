@@ -27,7 +27,8 @@ Layout (folders marked * are created in later phases):
 - `src/reliefd/`: `main.c` (mq loop, signals) plus one module per OS concept, e.g. `camps.c` (process
   table, fork/exec, SIGCHLD reaping, restarts). `src/camp/`: camp process. `src/reliefstat/`: read-only
   status reader. `src/common/`: logger, `shm.c` (POSIX shm status table: robust pshared mutex + seqlock).
-  `src/sched/`: IPC-free scheduler (policy table, `fcfs.c`, `sim.c` simulator, `schedsim.c` CLI); NOT on the
+  `src/sched/`: IPC-free scheduler (`sched.c` registry, one file per policy: fcfs sjf srtf rr prio mlfq;
+  `sim.c` simulator, `schedsim.c` CLI); NOT on the
   include path (its `sched.h` would shadow `<sched.h>`), tests include it by relative path
 - `scripts/`: `reliefctl` (getopts, awk; must pass shellcheck), `stockcheck.sh` (cron job, documented, not installed)
 - `tests/`: `smoke.sh` (IPC), `camps.sh` (supervision), `traffic.sh` (paced traffic, full queue), `signals.sh`
@@ -97,7 +98,8 @@ Layout (folders marked * are created in later phases):
   `--camps /dev/null` for no camps. `--time-scale` is the real ms per simulated minute (default 100; 0 = no pacing)
 - `build/camp --id N --scenario FILE [--time-scale MS]` (paced replay, then resident until SIGTERM),
   `--id N --count N --seed S` (random, sent immediately, then exits), or `--shutdown` (stops reliefd)
-- `build/schedsim --policy fcfs [--scenario F --teams N --quantum Q --seed S --starve MIN --csv F --gantt]`
+- `build/schedsim --policy fcfs|sjf|srtf|rr|prio|mlfq [--scenario F --teams N --quantum Q --preemptive on|off
+  --age MIN --seed S --starve MIN --csv F --gantt]` (MLFQ promotions logged on stderr)
 - `python3 experiments/gen_scenario.py [--rows N --camps N --seed S --duration MIN --mix C,U,R] [-o FILE]`
 - `make tsan` runs under `setarch -R`, because GCC 13 TSan aborts under WSL2's ASLR entropy
 - The queue `/reliefos_requests` and shm `/reliefos_status` are system-wide: only one reliefd can run at a time
@@ -113,5 +115,5 @@ Layout (folders marked * are created in later phases):
 Work the phases in order. Within a phase, ship all P0 features before any P1/P2.
 
 ## Current status
-Phase 1 complete (gate M1 passed: `tests/phase1_smoke.sh`). Phase 2 in progress: step 1 done (scheduler module,
-FCFS, deterministic `schedsim` with metrics + Gantt). Next: SJF, RR, Priority, MLFQ. Update as steps complete.
+Phase 1 complete (gate M1 passed). Phase 2: step 1 done (scheduler module, FCFS, `schedsim`); step 2 done (SJF,
+SRTF, RR, Priority, MLFQ with aging; textbook tests). Next: experiments E1/E2. Update as steps complete.

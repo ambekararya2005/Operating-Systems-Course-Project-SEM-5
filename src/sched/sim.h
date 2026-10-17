@@ -79,6 +79,17 @@ void sim_trace_free(sim_trace_t *tr);
 
 void sim_print_report(FILE *out, const char *policy, const sim_config_t *cfg, const sim_metrics_t *m);
 void sim_print_gantt(FILE *out, const sim_trace_t *tr);
+
+/* Label for a job in a labelled Gantt chart (e.g. "P1"); may return a static buffer. */
+typedef const char *(*sim_label_fn)(const sched_job_t *job);
+
+/* Textbook-style Gantt chart of one team over minutes [from, to):
+ *   | P1 | P2      | P4       | P1             | P3                  |
+ *   0    1         5          10               17                    26
+ * Each segment is cols_per_min characters per minute wide (at least wide enough for its
+ * label and start time); '.' marks idle time; long charts wrap at about 100 columns. */
+void sim_print_gantt_labeled(FILE *out, const sim_trace_t *tr, int team, int from, int to,
+                             sim_label_fn label, int cols_per_min);
 /* One row per job: id,camp,severity,arrival,burst,start,finish,wait,turnaround,response */
 int  sim_write_jobs_csv(const char *path, const sched_job_t *jobs, size_t n);
 

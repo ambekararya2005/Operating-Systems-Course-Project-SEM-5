@@ -6,8 +6,12 @@
  * switches and starvation. Simulated time only, no sleeping: the same arguments always
  * give the same output.
  *
- *   schedsim --policy fcfs --scenario scenarios/flood_pune.csv --teams 3
- *            [--quantum Q] [--seed S] [--starve MIN] [--csv out.csv] [--gantt]
+ *   schedsim --policy fcfs|sjf|srtf|rr|prio|mlfq --scenario scenarios/flood_pune.csv --teams 3
+ *            [--quantum Q] [--preemptive on|off] [--age MIN] [--seed S] [--starve MIN]
+ *            [--csv out.csv] [--gantt]
+ *
+ * MLFQ promotions (aging) are logged one per line on stderr; the report shows the number
+ * of promotions and demotions.
  *
  * Exit status: 0 ok, 1 runtime error, 2 usage error.
  */
@@ -24,17 +28,39 @@
 #define DEFAULT_TEAMS     3
 #define DEFAULT_QUANTUM   10
 #define DEFAULT_STARVE    120
+
+typedef struct {
+    unsigned long promotions, demotions;
+} event_counts_t;
+
+/* Policy event hook: log every promotion, count both kinds. */
+static void on_event(void *ctx, int64_t now, const sched_job_t *job, sched_event_t ev,
+                     int from, int to)
+{
+    event_counts_t *c = ctx;
+
+    if (ev == SCHED_EV_PROMOTE) {
+        c->promotions++;
+        fprintf(stderr, "t=%lld promote request %u Q%d -> Q%d (waited > age in Q%d)\n",
+                (long long)now, job->id, from, to, from);
+    } else {
+        c->demotions++;
+    }
+}
 #define GANTT_MINUTES     60
 
 static void usage(FILE *out, const char *prog)
 {
     fprintf(out,
-            "usage: %s --policy NAME [--scenario FILE] [--teams N] [--quantum Q] [--seed S]\n"
-            "          [--starve MIN] [--csv FILE] [--gantt]\n"
+            "usage: %s --policy NAME [--scenario FILE] [--teams N] [--quantum Q]\n"
+            "          [--preemptive on|off] [--age MIN] [--seed S] [--starve MIN] [--csv FILE] [--gantt]\n"
             "  --policy    scheduling policy: %s\n"
             "  --scenario  scenario CSV (default %s)\n"
             "  --teams     rescue teams = CPUs (default %d)\n"
-            "  --quantum   time slice in minutes for preemptive policies (default %d)\n"
+            "  --quantum   RR time slice in minutes (default %d)\n"
+            "  --preemptive on|off  prio: preempt lower-severity work (default off)\n"
+            "  --age       mlfq: promote a request waiting longer than this many minutes\n"
+            "              in its queue (default %d); each promotion is logged on stderr\n"
             "  --seed      order requests arriving in the same minute by a seeded hash\n"
             "              (default: keep scenario order)\n"
             "  --starve    a request waiting longer than this many minutes counts as starved\n"
@@ -43,7 +69,7 @@ static void usage(FILE *out, const char *prog)
             "              finish,wait,turnaround,response) to FILE\n"
             "  --gantt     print a Gantt chart of the first %d minutes per team\n",
             prog, sched_policy_names(), DEFAULT_SCENARIO, DEFAULT_TEAMS, DEFAULT_QUANTUM,
-            DEFAULT_STARVE, GANTT_MINUTES);
+            SCHED_DEFAULT_AGE, DEFAULT_STARVE, GANTT_MINUTES);
 }
 
 static int parse_long(const char *s, long min, long max, long *out)
@@ -66,6 +92,8 @@ int main(int argc, char **argv)
         { "scenario", required_argument, NULL, 'f' },
         { "teams",    required_argument, NULL, 'n' },
         { "quantum",  required_argument, NULL, 'q' },
+        { "preemptive", required_argument, NULL, 'P' },
+        { "age",      required_argument, NULL, 'a' },
         { "seed",     required_argument, NULL, 's' },
         { "starve",   required_argument, NULL, 'w' },
         { "csv",      required_argument, NULL, 'c' },
@@ -76,6 +104,9 @@ int main(int argc, char **argv)
     const char *policy_name = NULL, *scenario = DEFAULT_SCENARIO, *csv = NULL;
     sim_config_t cfg = { DEFAULT_TEAMS, DEFAULT_QUANTUM, DEFAULT_STARVE, 0, 0, 0 };
     sched_params_t params;
+    event_counts_t events = { 0, 0 };
+    int preemptive = -1;
+    long age = SCHED_DEFAULT_AGE;
     sched_policy_t *policy;
     sched_job_t *jobs = NULL;
     sim_metrics_t m;
@@ -84,7 +115,7 @@ int main(int argc, char **argv)
     int gantt = 0, opt, rc = 1;
     long v;
 
-    while ((opt = getopt_long(argc, argv, "p:f:n:q:s:w:c:gh", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "p:f:n:q:P:a:s:w:c:gh", opts, NULL)) != -1) {
         switch (opt) {
         case 'p': policy_name = optarg; break;
         case 'f': scenario = optarg; break;
@@ -103,6 +134,22 @@ int main(int argc, char **argv)
                 return 2;
             }
             cfg.quantum = (int)v;
+            break;
+        case 'P':
+            if (strcmp(optarg, "on") == 0)
+                preemptive = 1;
+            else if (strcmp(optarg, "off") == 0)
+                preemptive = 0;
+            else {
+                fprintf(stderr, "invalid --preemptive (on or off): %s\n", optarg);
+                return 2;
+            }
+            break;
+        case 'a':
+            if (parse_long(optarg, 1, 1000000, &age) == -1) {
+                fprintf(stderr, "invalid --age (minutes >= 1): %s\n", optarg);
+                return 2;
+            }
             break;
         case 's': {
             char *end;
@@ -133,9 +180,14 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    memset(&params, 0, sizeof params);
     params.teams = cfg.teams;
     params.quantum = cfg.quantum;
     params.seed = cfg.seed;
+    params.preemptive = preemptive;
+    params.age = age;
+    params.on_event = on_event;
+    params.event_ctx = &events;
     policy = sched_policy_create(policy_name, &params);
     if (!policy) {
         fprintf(stderr, "unknown policy '%s' (available: %s)\n", policy_name, sched_policy_names());
@@ -155,8 +207,11 @@ int main(int argc, char **argv)
 
     printf("scenario %s\n", scenario);
     sim_print_report(stdout, policy->name, &cfg, &m);
-    if (!policy->preemptive)
-        printf("  (%s is non-preemptive: --quantum has no effect)\n", policy->name);
+    if (events.promotions || events.demotions)
+        printf("  promotions (aging)  %lu\n  demotions           %lu\n", events.promotions,
+               events.demotions);
+    if (!policy->uses_quantum)
+        printf("  (--quantum is only used by rr)\n");
     if (gantt) {
         printf("\n");
         sim_print_gantt(stdout, &trace);

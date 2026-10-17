@@ -140,6 +140,16 @@ typedef struct {
     relief_shm_t *shm;      /* live status table (total_requests) */
 } stats_t;
 
+/* Lock the status table. Every reliefd lock site goes through here, so a robust-mutex
+ * recovery (a writer died holding the lock) is always logged, whichever path finds it. */
+static int status_lock(relief_shm_t *shm)
+{
+    int rc = relief_shm_begin_write(shm);
+    if (rc == 1)
+        EV_WARN("status_lock_recovered", "by=reliefd reason=EOWNERDEAD");
+    return rc;
+}
+
 /* Handle one message. Returns 1 if it was SHUTDOWN. */
 static int handle_message(const relief_msg_t *m, camp_table_t *camps, stats_t *st)
 {
@@ -162,7 +172,7 @@ static int handle_message(const relief_msg_t *m, camp_table_t *camps, stats_t *s
                 r->id, r->camp_id, r->camp_pid, relief_severity_name(r->severity),
                 relief_resource_name(r->resource), r->quantity, r->service_time, r->arrival,
                 (r->flags & REQ_FLAG_ALERT) ? 1 : 0, relief_severity_name(r->orig_severity));
-        if (st->shm && relief_shm_begin_write(st->shm) != -1) {
+        if (st->shm && status_lock(st->shm) != -1) {
             st->shm->data.total_requests++;
             relief_shm_end_write(st->shm);
         }
@@ -340,7 +350,7 @@ int main(int argc, char **argv)
         mq_unlink(RELIEF_MQ_NAME);
         goto fail_log;
     }
-    if (relief_shm_begin_write(st.shm) != -1) {
+    if (status_lock(st.shm) != -1) {
         st.shm->data.daemon_pid = (int32_t)getpid();
         st.shm->data.start_time_ms = relief_now_ms();
         relief_shm_end_write(st.shm);

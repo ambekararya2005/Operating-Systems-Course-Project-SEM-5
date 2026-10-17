@@ -165,8 +165,35 @@ request's `service_time`). Both `schedsim` (offline experiments) and, later, rel
 - **FCFS baseline** (flood scenario, 3 teams): average wait 401.9 min, CRITICAL 382.8 min, 166 of 200 starved,
   98.5% utilisation. The scenario oversubscribes 3 teams, and FCFS ignores severity, which motivates the
   priority-based policies and experiments E1/E2.
-- `tests/test_sched.c` checks the textbook example (P1=24, P2=3, P3=3 on 1 CPU gives an average wait of 17;
-  reordered P2, P3, P1 gives 3) plus multi-team runs, idle gaps, starvation and tie order.
+- **Policies** (one file each, registered by name in `sched.c`). Every file starts with a comment on the
+  algorithm, its trade-off and what it means for disaster relief.
+
+  | Policy | Preemptive | Picks | Notes |
+  |--------|------------|-------|-------|
+  | `fcfs` | no | Earliest arrival | Convoy effect |
+  | `sjf` | no | Shortest burst | Minimum average wait among non-preemptive policies; long rescues starve |
+  | `srtf` | yes | Least remaining time | Optimal average wait; more switches; strongest starvation of long jobs |
+  | `rr` | yes | FIFO, `--quantum` slices | A request that uses its quantum goes to the back only if others wait |
+  | `prio` | `--preemptive on\|off` | Severity (CRITICAL > URGENT > ROUTINE) | FCFS ties; no aging, so it starves on purpose |
+  | `mlfq` | yes | Highest non-empty queue | Q0 RR 8, Q1 RR 16, Q2 FCFS; entry level by severity; demote on full quantum; aging promotes after `--age` min |
+
+  The simulator keeps `slice` (minutes since dispatch), `ready_since` and `seq` (arrival order, the FCFS
+  tie-break) on every job. `sched_preempt_worst()` gives SRTF, preemptive prio and MLFQ the same
+  multi-team rule: the best ready jobs fill idle teams first, then each one that is *strictly* better than
+  the worst running job replaces it. Policies report promotions and demotions through
+  `params.on_event`; the scheduler itself does no I/O.
+- **Unit tests** (`tests/test_sched.c`, 138 checks, a Gantt chart per test). Every answer is worked out
+  by hand in a comment and asserted exactly: FCFS 24/3/3 gives 17 (reordered: 3), SJF on the standard
+  4-process example gives 7.75, SRTF 6.5, RR with quantum 4 gives 5.67, preemptive and non-preemptive
+  priority, MLFQ demotion Q0 → Q1 → Q2, and starvation. Under a steady critical stream, plain
+  priority makes a ROUTINE job wait 499 min, while MLFQ promotes it at t=62 and finishes it at t=119
+  (wait 113), matching a minute-by-minute hand trace.
+- **Flood scenario, 3 teams.** SJF/SRTF halve the average wait but do nothing for CRITICAL. Priority
+  cuts CRITICAL waits from 383 to about 30 minutes while everything else waits longer. MLFQ does
+  *worse* than FCFS for CRITICAL (525 min), because the scenario overloads 3 teams for hours:
+  nearly every waiting request ages past 60 minutes (522 promotions) and floods Q0, and long critical
+  rescues are demoted for using their 8-minute quantum. Under sustained overload, aging erodes the
+  priority it was meant to protect. Experiments E1/E2 should quantify this (age, quanta, team count).
 
 ## Structured log (`$RELIEF_HOME/logs/reliefd.log`)
 One event per line: `ts=<iso8601> level=<lvl> comp=reliefd pid=<pid> event=<name> key=value ...`.

@@ -26,7 +26,8 @@ RELIEFD_OBJ := $(RELIEFD_SRC:%.c=$(OBJ)/%.o)
 CAMP_OBJ    := $(CAMP_SRC:%.c=$(OBJ)/%.o)
 RELIEFSTAT_OBJ := $(RELIEFSTAT_SRC:%.c=$(OBJ)/%.o)
 # Scheduler library (independent of IPC): policies + discrete-time simulator.
-SCHED_SRC    := src/sched/sched.c src/sched/fcfs.c src/sched/sim.c
+SCHED_SRC    := src/sched/sched.c src/sched/sim.c src/sched/fcfs.c src/sched/sjf.c \
+                src/sched/srtf.c src/sched/rr.c src/sched/prio.c src/sched/mlfq.c
 SCHEDSIM_SRC := src/sched/schedsim.c $(SCHED_SRC)
 SCHEDSIM_OBJ := $(SCHEDSIM_SRC:%.c=$(OBJ)/%.o)
 TEST_SCHED_SRC := tests/test_sched.c $(SCHED_SRC)
