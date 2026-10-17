@@ -52,7 +52,10 @@ typedef enum {
     MSG_SHUTDOWN = 4,       /* admin -> reliefd */
     MSG_RELEASE  = 5,       /* camp -> reliefd: u.req (id, resource, units) handed back */
     MSG_GRANT    = 6,       /* reliefd -> camp reply queue: u.req of the granted request */
-    MSG_REJECT   = 7,       /* reliefd -> camp reply queue: u.req of a request that exceeds the claim */
+    MSG_REJECT   = 7,       /* reliefd -> camp reply queue: u.req refused (over the claim, or out of
+                             * resource order with REQ_FLAG_ORDER: release and retry in order) */
+    MSG_REVOKE   = 8,       /* reliefd -> camp reply queue: u.req's grant was preempted to break a
+                             * deadlock; the request is queued again (wait for a new MSG_GRANT) */
     MSG_KIND_COUNT
 } relief_msg_kind_t;
 
@@ -68,6 +71,8 @@ enum { BK_TRUCK = 0, BK_BOAT = 1, BK_MED_KIT = 2, BK_FOOD_KIT = 3 };
 
 /* relief_request_t.flags */
 #define REQ_FLAG_ALERT      0x01    /* escalated to CRITICAL by an evacuation alert (SIGUSR1) */
+#define REQ_FLAG_BUNDLE     0x02    /* all-or-nothing: u.bundle.units holds the whole task's vector */
+#define REQ_FLAG_ORDER      0x04    /* MSG_REJECT reason: requested out of resource order */
 
 /* One rescue/supply request; times are in simulated minutes. */
 typedef struct {
@@ -83,6 +88,16 @@ typedef struct {
     uint8_t  orig_severity; /* severity before any escalation */
     uint16_t units;         /* Banker's units asked for (vehicles, kit crates); 0 = not a Banker resource */
 } relief_request_t;
+
+/* Extended request. Every MSG_REQUEST carries `task` (the scenario's optional task column,
+ * 0 = a row on its own): --deadlock prevent orders acquisitions within one task. With
+ * REQ_FLAG_BUNDLE (--deadlock prevent --all-or-nothing) the message is a whole task: req.id
+ * is its first row and units[] what it needs of every Banker's resource. */
+typedef struct {
+    relief_request_t req;
+    uint16_t units[RELIEF_BANKER_RES];
+    uint32_t task;
+} relief_bundle_t;
 
 /* HELLO payload: the camp's maximum claim per Banker's resource, declared up front. */
 #define HELLO_FLAG_REPLY_QUEUE  0x01    /* the camp reads grants on its RELIEF_REPLY_MQ_FMT queue */
@@ -100,6 +115,7 @@ typedef struct {
     union {
         relief_request_t req;   /* MSG_REQUEST, MSG_RELEASE, MSG_GRANT, MSG_REJECT */
         relief_hello_t   hello; /* MSG_HELLO */
+        relief_bundle_t  bundle;    /* MSG_REQUEST: task id, and the vector of a REQ_FLAG_BUNDLE */
         uint8_t raw[RELIEF_MSG_SIZE - 16];
     } u;
 } relief_msg_t;
@@ -174,7 +190,7 @@ static inline int relief_resource_parse(const char *s)
  */
 #define RELIEF_SHM_NAME      "/reliefos_status"
 #define RELIEF_SHM_MAGIC     0x534c4552u     /* "RELS" */
-#define RELIEF_SHM_VERSION   4
+#define RELIEF_SHM_VERSION   5
 #define RELIEF_SHM_CAMPS     64
 #define RELIEF_CAMP_NAME_MAX 32
 #define RELIEF_SHM_TEAMS     16     /* max rescue team threads (reliefd --teams) */
@@ -254,7 +270,10 @@ typedef struct {
         int32_t  max[RELIEF_BANKER_RES];
         int32_t  alloc[RELIEF_BANKER_RES];
         uint32_t pending;                   /* requests of this camp waiting in reliefd */
+        int32_t  request[RELIEF_BANKER_RES];    /* units those waiting requests ask for */
     } bk_proc[RELIEF_SHM_CAMPS];
+    uint64_t dl_detected, dl_recoveries;    /* --deadlock detect */
+    char     dl_last_cycle[128];            /* e.g. "camp3->camp5->camp3" */
     uint64_t bk_grants, bk_denied_unsafe, bk_waits_unavailable, bk_releases, bk_rejects;
     uint32_t bk_pending;                    /* requests waiting (unsafe or unavailable) */
 } relief_status_t;
@@ -277,6 +296,7 @@ static inline const char *relief_msg_kind_name(unsigned k)
     case MSG_RELEASE:  return "RELEASE";
     case MSG_GRANT:    return "GRANT";
     case MSG_REJECT:   return "REJECT";
+    case MSG_REVOKE:   return "REVOKE";
     default:           return "?";
     }
 }

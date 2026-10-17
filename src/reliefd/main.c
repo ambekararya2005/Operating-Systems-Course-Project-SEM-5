@@ -218,18 +218,19 @@ static int handle_message(const relief_msg_t *m, camp_table_t *camps, stats_t *s
          * FOOD_KIT go to the Banker's resource manager first; kits continue to the loading dock
          * once granted (HYGIENE_KIT goes straight there). */
         int sched = r->resource == RES_RESCUE && st->disp != NULL;
-        int banker = relief_banker_index(r->resource) >= 0 && r->units > 0 && st->rm != NULL;
-        int dock = dock_handles(r->resource) && st->dock != NULL;
+        int bundle = (r->flags & REQ_FLAG_BUNDLE) != 0;
+        int banker = (bundle || (relief_banker_index(r->resource) >= 0 && r->units > 0)) && st->rm != NULL;
+        int dock = dock_handles(r->resource) && st->dock != NULL && !bundle;
         EV_INFO("request", "id=%u camp=%u camp_pid=%d severity=%s resource=%s qty=%u service=%u "
-                "arrival=%u alert=%d orig_severity=%s sched=%d dock=%d banker=%d units=%u",
+                "arrival=%u alert=%d orig_severity=%s sched=%d dock=%d banker=%d units=%u bundle=%d",
                 r->id, r->camp_id, r->camp_pid, relief_severity_name(r->severity),
                 relief_resource_name(r->resource), r->quantity, r->service_time, r->arrival,
                 (r->flags & REQ_FLAG_ALERT) ? 1 : 0, relief_severity_name(r->orig_severity), sched,
-                dock, banker, r->units);
+                dock, banker, r->units, bundle);
         if (sched)
             dispatch_submit(st->disp, r);
         if (banker)
-            resmgr_submit(st->rm, r);
+            resmgr_submit(st->rm, m);
         else if (dock && dock_submit(st->dock, r) == -1)
             EV_WARN("dock_submit_failed", "id=%u reason=ENOMEM", r->id);
         if (st->shm && status_lock(st->shm) != -1) {
@@ -293,8 +294,12 @@ static void usage(const char *prog)
             "  --trucks    truck consumer threads, 1-%d (default %d)\n"
             "  --rw        inventory readers-writers lock: semaphore (readers preference) or\n"
             "              rwlock (writer preference) (default %s)\n"
-            "  --deadlock  deadlock handling for vehicle/kit requests (default %s: Banker's algorithm;\n"
-            "              none, prevent and detect are not implemented yet)\n"
+            "  --deadlock  deadlock handling for vehicle/kit requests (default %s): avoid (Banker's\n"
+            "              algorithm), none (grant when free: deadlocks can happen), prevent (resource\n"
+            "              ordering TRUCK < BOAT < MED_KIT < FOOD_KIT), detect (wait-for graph + recovery)\n"
+            "  --all-or-nothing  with --deadlock prevent: a task asks for all its resources at once\n"
+            "              (breaks hold-and-wait instead of circular wait)\n"
+            "  --detect-interval S  with --deadlock detect: seconds between detector runs (default 1)\n"
             "  --resources Banker's resource totals (default %s)\n"
             "  --camp-bin  camp executable (default: camp next to reliefd)\n",
             prog, DEFAULT_CAMPS_CONF, DEFAULT_SCENARIO, DEFAULT_TIME_SCALE, DEFAULT_POLICY,
@@ -322,6 +327,8 @@ int main(int argc, char **argv)
         { "trucks",   required_argument, NULL, 'C' },
         { "rw",       required_argument, NULL, 'w' },
         { "deadlock", required_argument, NULL, 'L' },
+        { "all-or-nothing", no_argument, NULL, 'A' },
+        { "detect-interval", required_argument, NULL, 'I' },
         { "resources", required_argument, NULL, 'R' },
         { "help",     no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
@@ -333,7 +340,8 @@ int main(int argc, char **argv)
     const char *home = getenv("RELIEF_HOME");
     char pidpath[CAMPS_PATH_MAX], logdir[CAMPS_PATH_MAX], logpath[CAMPS_PATH_MAX];
     stats_t st = { { 0 }, NULL, NULL, NULL, NULL };
-    resmgr_config_t rcfg = { DEFAULT_DEADLOCK, RELIEF_BANKER_DEFAULT_TOTALS, 0, on_grant, &st };
+    resmgr_config_t rcfg = { DEFAULT_DEADLOCK, RELIEF_BANKER_DEFAULT_TOTALS, 0, 1000, on_grant, &st };
+    int all_or_nothing = 0;
     const char *resources = RELIEF_RESOURCES_CONF;
     char rerr[CAMPS_PATH_MAX + 128] = "";
     dock_config_t kcfg = { DEFAULT_DOCK, DEFAULT_PRODUCERS, DEFAULT_TRUCKS, 0, NULL };
@@ -349,7 +357,7 @@ int main(int argc, char **argv)
     camps.seed = 1;
     camps.time_scale_ms = DEFAULT_TIME_SCALE;
 
-    while ((opt = getopt_long(argc, argv, "c:s:S:t:xp:n:q:a:e:b:D:P:C:w:L:R:h", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:s:S:t:xp:n:q:a:e:b:D:P:C:w:L:R:AI:h", opts, NULL)) != -1) {
         char *end;
         switch (opt) {
         case 'c': camps_conf = optarg; break;
@@ -429,12 +437,19 @@ int main(int argc, char **argv)
                 fprintf(stderr, "invalid --deadlock (%s): %s\n", deadlock_policy_names(), optarg);
                 return 2;
             }
-            if (!pol->request) {
-                fprintf(stderr, "--deadlock %s (%s) is not implemented yet; use avoid\n", pol->name,
-                        pol->what);
+            rcfg.mode = pol->name;
+            break;
+        }
+        case 'A': all_or_nothing = 1; break;
+        case 'I': {
+            double secs;
+            errno = 0;
+            secs = strtod(optarg, &end);
+            if (errno || end == optarg || *end || secs < 0.01 || secs > 600) {
+                fprintf(stderr, "invalid --detect-interval (0.01-600 seconds): %s\n", optarg);
                 return 2;
             }
-            rcfg.mode = pol->name;
+            rcfg.detect_interval_ms = (long)(secs * 1000 + 0.5);
             break;
         }
         case 'R': resources = optarg; break;
@@ -446,6 +461,14 @@ int main(int argc, char **argv)
         usage(argv[0]);
         return 2;
     }
+    if (all_or_nothing) {
+        if (strcmp(rcfg.mode, "prevent") != 0 && strcmp(rcfg.mode, "prevent-all") != 0) {
+            fprintf(stderr, "--all-or-nothing needs --deadlock prevent\n");
+            return 2;
+        }
+        rcfg.mode = "prevent-all";
+    }
+    camps.all_or_nothing = deadlock_policy_find(rcfg.mode)->all_or_nothing;
 
     if (!home || !*home)
         home = RELIEF_HOME_DEFAULT;

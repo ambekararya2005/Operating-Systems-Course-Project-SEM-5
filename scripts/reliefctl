@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # OS concept: Shell programming — functions, getopts, awk/grep/sed pipelines, exit codes (Unit 1);
-#             the Banker's matrices shown in textbook layout (Unit 3);
+#             the Banker's matrices shown in textbook layout and the wait-for graph (Unit 3);
 #             process control and the PCB via /proc, signals as IPC to camps (Unit 2);
 #             live status read from POSIX shared memory via reliefstat (Unit 2)
 #
@@ -49,6 +49,8 @@ commands:
   sched [--json]        live scheduler: policy, ready queue per level, what each team works on
   banker [--json]       Banker's algorithm: Allocation, Max, Need and Available per camp, and a
                         safe sequence of the current state (from shared memory)
+  waitfor [--dot]       the wait-for graph: "campX -> campY [RESOURCE]" edges and any cycle;
+                        --dot prints Graphviz DOT (dot -Tpng waitfor.dot -o waitfor.png)
   ps                    per-process PCB fields from /proc for reliefd and every camp
   tree                  process tree rooted at reliefd
   alert <camp-id|all>   evacuation alert (SIGUSR1): the camp's next 5 requests become CRITICAL
@@ -546,6 +548,28 @@ cmd_banker() {
     fi
 }
 
+cmd_waitfor() {
+    local opt dot=0 stat="$BIN_DIR/reliefstat"
+    long_to_short "dot=d" "$@"
+    set -- "${ARGS[@]+"${ARGS[@]}"}"
+    local OPTIND=1
+    while getopts ":d" opt; do
+        case "$opt" in
+            d) dot=1 ;;
+            *) usage_err "waitfor: unknown option -$OPTARG" ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+    (( $# == 0 )) || usage_err "waitfor: unexpected argument '$1'"
+    require_daemon >/dev/null
+    [[ -x "$stat" ]] || die "reliefstat not built; run 'make' first"
+    if (( dot )); then
+        "${WRAP[@]}" "$stat" --waitfor --dot
+    else
+        "${WRAP[@]}" "$stat" --waitfor
+    fi
+}
+
 make_camps_conf() {
     local n=$1 out=$2
     awk -v n="$n" '
@@ -646,6 +670,7 @@ main() {
         status)         cmd_status "$@" ;;
         sched)          cmd_sched "$@" ;;
         banker)         cmd_banker "$@" ;;
+        waitfor)        cmd_waitfor "$@" ;;
         ps)             cmd_ps "$@" ;;
         tree)           cmd_tree "$@" ;;
         alert)          cmd_alert "$@" ;;

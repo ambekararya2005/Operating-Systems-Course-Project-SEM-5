@@ -20,9 +20,28 @@
  *   4. then P0 requests (0,2,0): denied as unsafe, although 0 2 0 <= Available
  *   5. on the original state, P4 (3,3,0) is available but unsafe: denied
  *   6. a request above Need is an error (over claim); release and remove return resources
+ *
+ * Deadlock detection, prevention and the wait-for graph (Phase 3 step 4):
+ *   7. detection algorithm, textbook example (A = 7, B = 2, C = 6, Available 0 0 0):
+ *            Allocation   Request
+ *       P0   0 1 0        0 0 0
+ *       P1   2 0 0        2 0 2
+ *       P2   3 0 3        0 0 0
+ *       P3   2 1 1        1 0 0
+ *       P4   0 0 2        0 0 2
+ *      -> no deadlock (<P0, P2, P3, P1, P4> can finish). If P2 then asks for one more C
+ *      (Request P2 = 0 0 1), P1, P2, P3 and P4 are deadlocked; only P0 can finish.
+ *   8. wait-for graph + DFS: P0 holds R0 and waits for R1, P1 holds R1 and waits for R0, P2
+ *      waits for R0 -> edges P0->P1, P1->P0, P2->P0; the cycle is P0 -> P1 -> P0. Without
+ *      P1's request the graph is acyclic.
+ *   9. resource ordering (prevent): holding a BOAT, a TRUCK request is rejected (out of order);
+ *      holding a TRUCK, a BOAT request is granted. Grant-if-free (none/detect) blocks when
+ *      the resources are not available.
  * Exit status 0 if every check passed.
  */
 #include "../src/deadlock/banker.h"
+#include "../src/deadlock/deadlock.h"
+#include "../src/deadlock/waitfor.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -141,6 +160,76 @@ int main(void)
     CHECK(banker_set_max(&b, 2, bad_max) == -1, "a claim above the total is refused");
     CHECK(banker_set_max(&b, 1, MAX[1]) == -1, "a claim cannot be re-declared while holding resources");
     printf("ok   over-claim is an error; release and termination return resources\n");
+
+    /* 7. Detection algorithm (several instances per resource type). */
+    {
+        static const int total[3] = { 7, 2, 6 };
+        static const int alloc[5][3] = { { 0, 1, 0 }, { 2, 0, 0 }, { 3, 0, 3 }, { 2, 1, 1 }, { 0, 0, 2 } };
+        static int request[BANKER_MAX_P][BANKER_MAX_R] = {
+            { 0, 0, 0 }, { 2, 0, 2 }, { 0, 0, 0 }, { 1, 0, 0 }, { 0, 0, 2 } };
+        unsigned char dead[BANKER_MAX_P];
+        banker_init(&b, 5, 3, total);
+        for (int p = 0; p < 5; p++) {
+            CHECK(banker_set_max(&b, p, total) == 0 && banker_set_alloc(&b, p, alloc[p]) == 0, "setup P%d", p);
+        }
+        CHECK(vec_eq(b.available, 0, 0, 0), "detection example: Available 0 0 0");
+        CHECK(banker_detect(&b, (const int (*)[BANKER_MAX_R])request, dead) == 0,
+              "detection example: no deadlock expected");
+        request[2][2] = 1;      /* P2 asks for one more C */
+        int nd = banker_detect(&b, (const int (*)[BANKER_MAX_R])request, dead);
+        CHECK(nd == 4 && !dead[0] && dead[1] && dead[2] && dead[3] && dead[4],
+              "after P2's extra request: P1..P4 deadlocked, P0 not (got %d)", nd);
+        printf("ok   detection algorithm: textbook example has no deadlock; after P2 requests 0 0 1, "
+               "P1, P2, P3, P4 are deadlocked\n");
+    }
+
+    /* 8. Wait-for graph and DFS. */
+    {
+        static const int tot2[2] = { 1, 1 }, max2[2] = { 1, 1 };
+        static const int a0[2] = { 1, 0 }, a1[2] = { 0, 1 };
+        static int request[BANKER_MAX_P][BANKER_MAX_R] = { { 0, 1 }, { 1, 0 }, { 1, 0 } };
+        static waitfor_t g;
+        int cyc[BANKER_MAX_P], clen;
+        banker_init(&b, 3, 2, tot2);
+        for (int p = 0; p < 3; p++)
+            banker_set_max(&b, p, max2);
+        banker_set_alloc(&b, 0, a0);
+        banker_set_alloc(&b, 1, a1);
+        waitfor_build(&g, &b, (const int (*)[BANKER_MAX_R])request);
+        CHECK(g.label[0][1] == 2u && g.label[1][0] == 1u && g.label[2][0] == 1u && waitfor_edges(&g) == 3,
+              "edges P0->P1 [R1], P1->P0 [R0], P2->P0 [R0] expected");
+        CHECK(waitfor_find_cycle(&g, cyc, &clen) == 1 && clen == 2 &&
+              ((cyc[0] == 0 && cyc[1] == 1) || (cyc[0] == 1 && cyc[1] == 0)), "cycle P0 -> P1 -> P0 expected");
+        request[1][0] = 0;      /* P1 no longer waits: acyclic */
+        waitfor_build(&g, &b, (const int (*)[BANKER_MAX_R])request);
+        CHECK(waitfor_find_cycle(&g, cyc, &clen) == 0 && waitfor_edges(&g) == 2, "acyclic without P1's request");
+        printf("ok   wait-for graph: edges built from Allocation + Request; DFS finds P0 -> P1 -> P0, "
+               "and no cycle once P1 stops waiting\n");
+    }
+
+    /* 9. Prevention by resource ordering; grant-if-free. Columns TRUCK, BOAT, MED, FOOD. */
+    {
+        static const int tot4[4] = { 2, 2, 4, 4 };
+        const int boat[4] = { 0, 1, 0, 0 }, truck[4] = { 1, 0, 0, 0 }, two_trucks[4] = { 2, 0, 0, 0 };
+        banker_init(&b, 2, 4, tot4);
+        banker_set_max(&b, 0, tot4);
+        banker_set_max(&b, 1, tot4);
+        CHECK(deadlock_ordered(&b, 0, boat, NULL, seq, &len) == BANKER_GRANT, "P0: a BOAT first is in order");
+        CHECK(deadlock_ordered(&b, 0, truck, NULL, seq, &len) == BANKER_ORDER,
+              "P0 holds a BOAT: a TRUCK request is out of order");
+        CHECK(deadlock_ordered(&b, 1, truck, NULL, seq, &len) == BANKER_GRANT &&
+              deadlock_ordered(&b, 1, boat, NULL, seq, &len) == BANKER_GRANT, "P1: TRUCK then BOAT is in order");
+        const int nothing[4] = { 0 };
+        CHECK(deadlock_ordered(&b, 0, truck, nothing, seq, &len) == BANKER_GRANT,
+              "per job: a job holding nothing may take a TRUCK although its camp holds a BOAT");
+        CHECK(deadlock_grant_if_free(&b, 1, truck, NULL, seq, &len) == BANKER_UNAVAILABLE,
+              "grant-if-free: no truck left, P1 must wait");
+        CHECK(deadlock_grant_if_free(&b, 1, two_trucks, NULL, seq, &len) == BANKER_OVER_CLAIM,
+              "grant-if-free: beyond the claim is an error");
+        CHECK(deadlock_policy_find("detect")->detector && deadlock_policy_find("prevent-all")->all_or_nothing &&
+              !deadlock_policy_find("bogus"), "policy table");
+        printf("ok   resource ordering: BOAT then TRUCK rejected, TRUCK then BOAT granted; grant-if-free blocks\n");
+    }
 
     if (g_failed) {
         fprintf(stderr, "test_banker: %d of %d checks FAILED\n", g_failed, g_checks);

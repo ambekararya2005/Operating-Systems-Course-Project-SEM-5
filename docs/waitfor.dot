@@ -1,0 +1,11 @@
+// ReliefOS wait-for graph (--deadlock none): an edge X -> Y means camp X waits for a
+// resource camp Y holds. Render: dot -Tpng waitfor.dot -o waitfor.png
+digraph waitfor {
+    rankdir=LR;
+    node [shape=circle, fontname="Helvetica"];
+    edge [fontname="Helvetica", fontsize=10];
+    camp2 [color="#e34948", penwidth=2];
+    camp1 [color="#e34948", penwidth=2];
+    camp2 -> camp1 [label="BOAT", color="#e34948", penwidth=2];
+    camp1 -> camp2 [label="TRUCK", color="#e34948", penwidth=2];
+}

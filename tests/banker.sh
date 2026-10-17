@@ -101,7 +101,7 @@ for ev in grant release; do
 done
 [[ $(count ' event=reject_over_claim ') -eq 0 && $(count ' event=banker_abandoned ') -eq 0 ]] \
     || fail "no request should be rejected or abandoned"
-grep -q " event=banker_stop mode=avoid grants=$reqs .* releases=$reqs rejects=0 abandoned=0" "$LOG" \
+grep -q " event=banker_stop mode=avoid grants=$reqs .* releases=$reqs rejects=0 .* abandoned=0" "$LOG" \
     || fail "banker_stop totals: $(grep -o 'event=banker_stop.*' "$LOG")"
 pass "flood: $reqs Banker's requests, each granted once and released once; none rejected or abandoned"
 
@@ -163,13 +163,6 @@ stop_reliefd
 pass "SIGKILLed camp: release_all returned its 3 trucks; the waiting camp was woken and granted"
 
 # 5. Modes and bad input.
-for mode in none prevent detect; do
-    rc=0
-    "${WRAP[@]}" "$BIN/reliefd" --deadlock "$mode" --camps /dev/null > "$RELIEF_HOME/mode.err" 2>&1 || rc=$?
-    if ! { [[ $rc -eq 2 ]] && grep -q 'not implemented yet' "$RELIEF_HOME/mode.err"; }; then
-        fail "--deadlock $mode should exit 2 'not implemented yet' (rc $rc)"
-    fi
-done
 rc=0; "${WRAP[@]}" "$BIN/reliefd" --deadlock bogus --camps /dev/null >/dev/null 2>&1 || rc=$?
 [[ $rc -eq 2 ]] || fail "--deadlock bogus should exit 2, got $rc"
 printf 'TRUCK 3\nPLANES 4\n' > "$RELIEF_HOME/bad.conf"
@@ -178,7 +171,7 @@ rc=0; "${WRAP[@]}" "$BIN/reliefd" --resources "$RELIEF_HOME/bad.conf" --camps /d
 [[ ! -e /dev/shm/reliefos_status && ! -e /dev/mqueue/reliefos_requests ]] || fail "failed starts left IPC objects"
 rc=0; "$CTL" banker >/dev/null 2>&1 || rc=$?
 [[ $rc -eq 1 ]] || fail "reliefctl banker without reliefd should exit 1, got $rc"
-pass "--deadlock none/prevent/detect: not implemented yet (exit 2); bad mode/resources fail cleanly"
+pass "bad --deadlock mode and bad resources.conf fail cleanly"
 
 if ls /dev/mqueue/reliefos_camp_* >/dev/null 2>&1; then
     fail "camp reply queues left behind: $(ls /dev/mqueue/reliefos_camp_*)"

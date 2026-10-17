@@ -109,12 +109,14 @@ static void usage(const char *prog)
 {
     fprintf(stderr,
             "usage: %s --id N --scenario FILE [--time-scale MS] [--seed S] [--exit-when-done]\n"
-            "          [--resources FILE]\n"
+            "          [--resources FILE] [--all-or-nothing]\n"
             "          (resident until SIGTERM, or until the replay ends with --exit-when-done)\n"
             "       %s --id N [--count N] [--seed S]   (send N random requests and exit)\n"
             "       %s --shutdown\n"
             "  --time-scale MS  real milliseconds per simulated minute (default %d, 0 = no pacing)\n"
             "  --resources FILE Banker's totals that cap the declared claim (default: built-in 3/2/40/60)\n"
+            "  --all-or-nothing request each task (rows sharing the optional 7th CSV column) in one\n"
+            "                   message (reliefd passes it with --deadlock prevent --all-or-nothing)\n"
             "signals: SIGUSR1 = evacuation alert, SIGUSR2 = status dump, SIGTERM = graceful exit\n",
             prog, prog, prog, DEFAULT_TIME_SCALE);
 }
@@ -320,18 +322,26 @@ static int send_simple(camp_ctx_t *c, relief_msg_kind_t kind, int max_tries)
     return send_msg(c, max_tries);
 }
 
-/* Send one request, applying any pending alert escalation. */
-static int send_request(camp_ctx_t *c, const relief_request_t *req)
+/* Send one request, applying any pending alert escalation. bundle != NULL: an all-or-nothing
+ * request for a whole task (REQ_FLAG_BUNDLE, the task's units per Banker's resource). */
+static int send_request_ex(camp_ctx_t *c, const relief_request_t *req, const uint16_t *bundle,
+                           uint32_t task)
 {
     relief_request_t *q = &c->msg.u.req;
 
     service_signals(c);     /* an alert that just arrived applies to this request */
+    memset(&c->msg.u, 0, sizeof c->msg.u);
     c->msg.kind = MSG_REQUEST;
     *q = *req;
     q->camp_id = c->id;
     q->camp_pid = c->msg.camp_pid;
     q->orig_severity = req->severity;
     q->flags = 0;
+    c->msg.u.bundle.task = task;
+    if (bundle) {
+        q->flags |= REQ_FLAG_BUNDLE;
+        memcpy(c->msg.u.bundle.units, bundle, sizeof c->msg.u.bundle.units);
+    }
     if (c->escalate_left > 0) {
         c->escalate_left--;
         c->escalated++;
@@ -349,6 +359,11 @@ static int send_request(camp_ctx_t *c, const relief_request_t *req)
              q->quantity, q->service_time, q->arrival,
              (q->flags & REQ_FLAG_ALERT) ? " alert=1" : "");
     return 0;
+}
+
+static int send_request(camp_ctx_t *c, const relief_request_t *req)
+{
+    return send_request_ex(c, req, NULL, 0);
 }
 
 /* Send the random workload immediately. Returns number sent, or -1 on error. */
@@ -384,6 +399,7 @@ static long send_random(camp_ctx_t *c, unsigned long count, unsigned long seed)
 typedef struct {
     relief_request_t req;
     unsigned lineno;
+    uint32_t task;          /* optional 7th CSV column: rows of one task share it; 0 = none */
 } scenario_row_t;
 
 static int row_cmp(const void *a, const void *b)
@@ -408,15 +424,16 @@ static long load_scenario(const char *path, uint32_t id, scenario_row_t **rows_o
         return -1;
     }
     while (fgets(line, sizeof line, f)) {
-        unsigned arrival, camp, qty, service;
+        unsigned arrival, camp, qty, service, task = 0;
         char sev[16], res[16];
-        int s, r;
+        int s, r, nf;
 
         lineno++;
         if (lineno == 1 || line[0] == '#' || line[0] == '\n')
             continue;   /* header / comments / blank lines */
-        if (sscanf(line, "%u,%u,%15[^,],%15[^,],%u,%u", &arrival, &camp, sev, res, &qty,
-                   &service) != 6 ||
+        nf = sscanf(line, "%u,%u,%15[^,],%15[^,],%u,%u,%u", &arrival, &camp, sev, res, &qty, &service,
+                    &task);
+        if ((nf != 6 && nf != 7) ||
             (s = relief_severity_parse(sev)) < 0 || (r = relief_resource_parse(res)) < 0 ||
             qty == 0 || qty > UINT16_MAX) {
             LOG_WARN("%s:%u: skipping malformed row", path, lineno);
@@ -445,6 +462,7 @@ static long load_scenario(const char *path, uint32_t id, scenario_row_t **rows_o
         row->req.quantity = (uint16_t)qty;
         row->req.service_time = service;
         row->req.arrival = arrival;
+        row->task = task;
     }
     fclose(f);
     if (n > 1)
@@ -475,6 +493,8 @@ static void compute_claim(camp_ctx_t *c, scenario_row_t *rows, long n)
         unsigned u = relief_banker_units(r->resource, r->quantity);
         r->units = (uint16_t)(u > (unsigned)c->total[bi] ? (unsigned)c->total[bi] : u);
     }
+    /* A row is held from its arrival until it is released: a lone row for its service time,
+     * a task's row until the task's last row has arrived plus the task's longest service time. */
     for (long k = 0; k < n; k++) {
         int bi = relief_banker_index(rows[k].req.resource), held = 0;
         if (bi < 0)
@@ -482,8 +502,20 @@ static void compute_claim(camp_ctx_t *c, scenario_row_t *rows, long n)
         uint32_t t = rows[k].req.arrival;
         for (long i = 0; i < n; i++) {
             const relief_request_t *r = &rows[i].req;
-            uint32_t hold = r->service_time ? r->service_time : 1;
-            if (relief_banker_index(r->resource) == bi && r->arrival <= t && t < r->arrival + hold)
+            uint32_t end = r->arrival + (r->service_time ? r->service_time : 1);
+            if (rows[i].task) {
+                uint32_t last = 0, hold = 1;
+                for (long x = 0; x < n; x++) {
+                    if (rows[x].task != rows[i].task)
+                        continue;
+                    if (rows[x].req.arrival > last)
+                        last = rows[x].req.arrival;
+                    if (rows[x].req.service_time > hold)
+                        hold = rows[x].req.service_time;
+                }
+                end = last + hold;
+            }
+            if (relief_banker_index(r->resource) == bi && r->arrival <= t && t < end)
                 held += r->units;
         }
         if (held > c->claim[bi])
@@ -547,84 +579,324 @@ static int send_release(camp_ctx_t *c, const relief_request_t *req)
 }
 
 enum { IT_WAITING = 0, IT_DEFERRED, IT_PENDING, IT_HELD, IT_DONE };
+#define TASK_MAX_ROWS   8
+#define NO_TIMER        INT64_MAX
 
 typedef struct {
     const relief_request_t *req;
-    int     bi;                 /* Banker's column, -1 for other resources (or no reply queue) */
+    int     bi;             /* Banker's column, -1 for other resources (or no reply queue) */
+    int     task;           /* index into the task table, -1 for a row that is a job on its own */
     int     state;
-    int64_t release_ns;
+    int64_t release_ns;     /* HELD: when to hand it back; NO_TIMER while its task is incomplete */
+    int     noted;          /* "holding back" already logged */
 } item_t;
 
-/* Handle one reply from reliefd. */
-static void on_reply(camp_ctx_t *c, const relief_msg_t *m, item_t *it, long n, int *outstanding,
-                     int64_t scale_ns)
+/* A task: rows (same `task` column) that are acquired one after another, held together until
+ * the last is granted, and released together after the task's longest service time. While
+ * it waits for its next row, a task holds the rows it already has: hold and wait. */
+typedef struct {
+    uint32_t id;
+    int      n, rows[TASK_MAX_ROWS];    /* item indexes, in acquisition order */
+    uint32_t hold;
+    int      bundle;                    /* all-or-nothing: 0 not sent, 1 waiting, 2 held */
+} task_t;
+
+typedef struct {
+    camp_ctx_t *c;
+    item_t     *it;
+    long        n;
+    task_t     *tk;
+    int         ntasks;
+    int         outstanding[RELIEF_BANKER_RES];  /* units asked for and not handed back */
+    int         all_or_nothing; /* send each task as one bundle */
+    int64_t     scale_ns;
+} replay_t;
+
+/* The task's next row to acquire (first one not held), or -1 if it holds them all. */
+static int task_next(const replay_t *rp, const task_t *t)
 {
-    for (long k = 0; k < n; k++) {
-        if (it[k].req->id != m->u.req.id || it[k].state != IT_PENDING)
-            continue;
-        if (m->kind == MSG_GRANT) {
-            it[k].state = IT_HELD;
-            it[k].release_ns = mono_ns() + (int64_t)it[k].req->service_time * scale_ns;
-            c->granted++;
-            LOG_INFO("GRANT id=%u resource=%s units=%u, holding for %u min", m->u.req.id,
-                     relief_resource_name(m->u.req.resource), m->u.req.units, it[k].req->service_time);
-        } else {
-            it[k].state = IT_DONE;
-            outstanding[it[k].bi] -= it[k].req->units;
-            c->rejected++;
-            LOG_WARN("REJECT id=%u resource=%s units=%u (over the declared claim)", m->u.req.id,
-                     relief_resource_name(m->u.req.resource), m->u.req.units);
+    for (int r = 0; r < t->n; r++)
+        if (rp->it[t->rows[r]].state != IT_HELD)
+            return t->rows[r];
+    return -1;
+}
+
+static int task_has_state(const replay_t *rp, const task_t *t, int state)
+{
+    for (int r = 0; r < t->n; r++)
+        if (rp->it[t->rows[r]].state == state)
+            return 1;
+    return 0;
+}
+
+/* Every row held: start the task's hold time. */
+static void task_start_hold(replay_t *rp, task_t *t, int64_t now)
+{
+    for (int r = 0; r < t->n; r++)
+        rp->it[t->rows[r]].release_ns = now + (int64_t)t->hold * rp->scale_ns;
+}
+
+/* Acquisition order = resource order (stable): what --deadlock prevent asks for. */
+static void task_sort(replay_t *rp, task_t *t)
+{
+    for (int a = 1; a < t->n; a++)
+        for (int b = a; b > 0 && rp->it[t->rows[b - 1]].bi > rp->it[t->rows[b]].bi; b--) {
+            int tmp = t->rows[b];
+            t->rows[b] = t->rows[b - 1];
+            t->rows[b - 1] = tmp;
         }
-        return;
+}
+
+static int replay_release(replay_t *rp, item_t *x)
+{
+    x->state = IT_DONE;
+    rp->outstanding[x->bi] -= x->req->units;
+    return send_release(rp->c, x->req);
+}
+
+/* Handle one reply from reliefd. Returns -1 if a send failed. */
+static int on_reply(replay_t *rp, const relief_msg_t *m)
+{
+    camp_ctx_t *c = rp->c;
+    uint32_t id = m->u.req.id;
+    int64_t now = mono_ns();
+    item_t *x = NULL;
+    task_t *t = NULL;
+
+    for (long k = 0; k < rp->n && !x; k++)
+        if (rp->it[k].req->id == id)
+            x = &rp->it[k];
+    if (x && x->task >= 0)
+        t = &rp->tk[x->task];
+
+    if (m->kind == MSG_GRANT) {
+        if (t && rp->all_or_nothing && t->bundle == 1 && (m->u.req.flags & REQ_FLAG_BUNDLE)) {
+            for (int r = 0; r < t->n; r++)
+                rp->it[t->rows[r]].state = IT_HELD;
+            t->bundle = 2;
+            task_start_hold(rp, t, now);
+            c->granted++;
+            LOG_INFO("GRANT task %u (all %d rows at once), holding for %u min", t->id, t->n, t->hold);
+            return 0;
+        }
+        if (!x || x->state != IT_PENDING) {     /* e.g. requeued after we released it: give it back */
+            LOG_WARN("GRANT for request %u that is not waiting: releasing it at once", id);
+            return send_release(c, &m->u.req);
+        }
+        x->state = IT_HELD;
+        c->granted++;
+        if (t) {
+            x->release_ns = NO_TIMER;
+            if (task_next(rp, t) < 0)
+                task_start_hold(rp, t, now);
+            LOG_INFO("GRANT id=%u resource=%s units=%u (task %u: %s)", id, relief_resource_name(x->req->resource),
+                     x->req->units, t->id, task_next(rp, t) < 0 ? "complete, holding" : "holding, wants more");
+        } else {
+            x->release_ns = now + (int64_t)x->req->service_time * rp->scale_ns;
+            LOG_INFO("GRANT id=%u resource=%s units=%u, holding for %u min", id,
+                     relief_resource_name(x->req->resource), x->req->units, x->req->service_time);
+        }
+        return 0;
     }
-    LOG_WARN("unexpected %s for request %u", relief_msg_kind_name(m->kind), m->u.req.id);
+
+    if (m->kind == MSG_REVOKE) {
+        if (t && t->bundle == 2) {
+            for (int r = 0; r < t->n; r++) {
+                rp->it[t->rows[r]].state = IT_PENDING;
+                rp->it[t->rows[r]].release_ns = NO_TIMER;
+            }
+            t->bundle = 1;
+        } else if (x && x->state == IT_HELD) {
+            x->state = IT_PENDING;          /* reliefd queued the request again */
+            if (t)
+                for (int r = 0; r < t->n; r++)
+                    rp->it[t->rows[r]].release_ns = NO_TIMER;   /* the task is incomplete again */
+        } else {
+            LOG_WARN("REVOKE for request %u that is not held", id);
+            return 0;
+        }
+        LOG_WARN("REVOKE id=%u: preempted to break a deadlock, waiting for it again", id);
+        return 0;
+    }
+
+    /* MSG_REJECT */
+    if (!x || (x->state != IT_PENDING && !(t && t->bundle == 1))) {
+        LOG_WARN("REJECT for request %u that is not waiting", id);
+        return 0;
+    }
+    if (m->u.req.flags & REQ_FLAG_ORDER) {
+        /* Out of resource order: give back what this task holds and acquire it in order. */
+        x->state = IT_DEFERRED;
+        rp->outstanding[x->bi] -= x->req->units;
+        c->rejected++;
+        if (t) {
+            for (int r = 0; r < t->n; r++) {
+                item_t *y = &rp->it[t->rows[r]];
+                if (y->state != IT_HELD)
+                    continue;
+                if (replay_release(rp, y) == -1)
+                    return -1;
+                y->state = IT_DEFERRED;
+            }
+            task_sort(rp, t);
+            LOG_WARN("REJECT id=%u: out of resource order; released task %u, retrying it in the order "
+                     "TRUCK < BOAT < MED_KIT < FOOD_KIT", id, t->id);
+        } else {
+            LOG_WARN("REJECT id=%u: out of resource order; retrying", id);
+        }
+        return 0;
+    }
+    if (t && t->bundle == 1) {
+        for (int r = 0; r < t->n; r++) {
+            rp->it[t->rows[r]].state = IT_DONE;
+            rp->outstanding[rp->it[t->rows[r]].bi] -= rp->it[t->rows[r]].req->units;
+        }
+        t->bundle = 0;
+    } else {
+        x->state = IT_DONE;
+        rp->outstanding[x->bi] -= x->req->units;
+    }
+    c->rejected++;
+    LOG_WARN("REJECT id=%u resource=%s units=%u (over the declared claim)", id,
+             relief_resource_name(m->u.req.resource), m->u.req.units);
+    return 0;
+}
+
+/* Can banker row x be sent now? (claim, resource order, task sequence) */
+static int may_send(const replay_t *rp, const item_t *x)
+{
+    camp_ctx_t *c = rp->c;
+    if (rp->outstanding[x->bi] + x->req->units > c->claim[x->bi])
+        return 0;
+    if (x->task >= 0) {
+        const task_t *t = &rp->tk[x->task];
+        if (task_has_state(rp, t, IT_PENDING) || task_next(rp, t) != x - rp->it)
+            return 0;               /* one row at a time, in the task's order */
+    }
+    return 1;
+}
+
+/* All-or-nothing: send task t as one bundle once all its rows are due. */
+static int send_bundle(replay_t *rp, task_t *t)
+{
+    uint16_t units[RELIEF_BANKER_RES] = { 0 };
+    for (int r = 0; r < t->n; r++) {
+        const item_t *y = &rp->it[t->rows[r]];
+        if (y->state != IT_DEFERRED)
+            return 0;
+        units[y->bi] += y->req->units;
+    }
+    for (int j = 0; j < RELIEF_BANKER_RES; j++)
+        if (rp->outstanding[j] + units[j] > rp->c->claim[j])
+            return 0;
+    if (send_request_ex(rp->c, rp->it[t->rows[0]].req, units, t->id) == -1)
+        return -1;
+    for (int r = 0; r < t->n; r++)
+        rp->it[t->rows[r]].state = IT_PENDING;
+    for (int j = 0; j < RELIEF_BANKER_RES; j++)
+        rp->outstanding[j] += units[j];
+    t->bundle = 1;
+    LOG_INFO("sent task %u as one all-or-nothing request: TRUCK=%u BOAT=%u MED_KIT=%u FOOD_KIT=%u", t->id,
+             units[0], units[1], units[2], units[3]);
+    return 1;
+}
+
+/* Build the task table from the rows' task column. Returns the number of tasks, or -1. */
+static int build_tasks(replay_t *rp, scenario_row_t *rows)
+{
+    for (long k = 0; k < rp->n; k++) {
+        rp->it[k].task = -1;
+        if (!rows[k].task || rp->it[k].bi < 0)
+            continue;
+        int t = 0;
+        while (t < rp->ntasks && rp->tk[t].id != rows[k].task)
+            t++;
+        if (t == rp->ntasks) {
+            rp->tk[t].id = rows[k].task;
+            rp->ntasks++;
+        }
+        task_t *tk = &rp->tk[t];
+        if (tk->n == TASK_MAX_ROWS) {
+            LOG_ERROR("task %u has more than %d Banker's rows", tk->id, TASK_MAX_ROWS);
+            return -1;
+        }
+        tk->rows[tk->n++] = (int)k;
+        if (rows[k].req.service_time > tk->hold)
+            tk->hold = rows[k].req.service_time;
+        rp->it[k].task = t;
+    }
+    return rp->ntasks;
 }
 
 /*
  * Replay this camp's scenario rows on a simulated clock (a row with arrival A minutes is due
  * at replay start + A * time_scale_ms) and look after the Banker's requests: send a due row unless
  * it would take the camp over its claim (then it waits here), wait for reliefd's GRANT, hold,
- * RELEASE. Ends when every row is done (exit_when_done) or on SIGTERM/SIGINT.
+ * RELEASE. Rows of a task are acquired one after another and released together. Ends when
+ * every row is done (exit_when_done) or on SIGTERM/SIGINT.
  * Returns the number of requests sent, or -1 on error.
  */
 static long run_scenario(camp_ctx_t *c, scenario_row_t *rows, long n, unsigned long time_scale_ms,
-                         int exit_when_done)
+                         int exit_when_done, int all_or_nothing)
 {
-    item_t *it = calloc((size_t)(n ? n : 1), sizeof *it);
+    replay_t rp;
     int64_t t0 = mono_ns();     /* simulated minute 0: the replay starts now, after HELLO, so
                                  * startup cost (e.g. under valgrind) does not compress the rows */
-    int64_t scale_ns = (int64_t)time_scale_ms * 1000000;
-    int outstanding[RELIEF_BANKER_RES] = { 0 };
     long next = 0, rc = 0;
 
-    if (!it) {
+    memset(&rp, 0, sizeof rp);
+    rp.c = c;
+    rp.n = n;
+    rp.scale_ns = (int64_t)time_scale_ms * 1000000;
+    rp.all_or_nothing = all_or_nothing;
+    rp.it = calloc((size_t)(n ? n : 1), sizeof *rp.it);
+    rp.tk = calloc((size_t)(n ? n : 1), sizeof *rp.tk);
+    if (!rp.it || !rp.tk) {
         LOG_ERROR("out of memory");
+        free(rp.it);
+        free(rp.tk);
         return -1;
     }
     for (long k = 0; k < n; k++) {
-        it[k].req = &rows[k].req;
-        it[k].bi = c->have_reply ? relief_banker_index(rows[k].req.resource) : -1;
+        rp.it[k].req = &rows[k].req;
+        rp.it[k].bi = c->have_reply ? relief_banker_index(rows[k].req.resource) : -1;
+    }
+    if (build_tasks(&rp, rows) < 0) {
+        free(rp.it);
+        free(rp.tk);
+        return -1;
     }
     c->rows_total = n;
-    LOG_INFO("camp %u: %ld scenario rows, time scale %lu ms per simulated minute", c->id, n, time_scale_ms);
+    LOG_INFO("camp %u: %ld scenario rows (%d tasks), time scale %lu ms per simulated minute%s", c->id, n,
+             rp.ntasks, time_scale_ms, all_or_nothing ? ", tasks all-or-nothing" : "");
 
     while (!g_stop) {
         int64_t now = mono_ns(), wake = now + 100000000;    /* re-check signals every 100 ms */
         int busy = next < n;
 
         service_signals(c);
-        /* Hold times that are over: hand the resources back. */
+        /* Hold times that are over: hand the resources back (a bundle in one message). */
         for (long k = 0; k < next && rc == 0 && !g_stop; k++) {
-            if (it[k].state == IT_HELD && it[k].release_ns <= now) {
-                if (send_release(c, it[k].req) == -1)
+            item_t *x = &rp.it[k];
+            if (x->state != IT_HELD || x->release_ns > now)
+                continue;
+            task_t *t = x->task >= 0 ? &rp.tk[x->task] : NULL;
+            if (t && t->bundle == 2) {
+                if (send_release(c, rp.it[t->rows[0]].req) == -1)
                     rc = -1;
-                it[k].state = IT_DONE;
-                outstanding[it[k].bi] -= it[k].req->units;
+                for (int r = 0; r < t->n; r++) {
+                    rp.it[t->rows[r]].state = IT_DONE;
+                    rp.outstanding[rp.it[t->rows[r]].bi] -= rp.it[t->rows[r]].req->units;
+                }
+                t->bundle = 3;
+            } else if (replay_release(&rp, x) == -1) {
+                rc = -1;
             }
         }
         /* Rows that are due. */
-        while (rc == 0 && !g_stop && next < n && (scale_ns == 0 || now >= t0 + (int64_t)it[next].req->arrival * scale_ns)) {
-            item_t *x = &it[next++];
+        while (rc == 0 && !g_stop && next < n &&
+               (rp.scale_ns == 0 || now >= t0 + (int64_t)rp.it[next].req->arrival * rp.scale_ns)) {
+            item_t *x = &rp.it[next++];
             if (x->bi < 0) {
                 if (send_request(c, x->req) == -1)
                     rc = -1;
@@ -633,39 +905,46 @@ static long run_scenario(camp_ctx_t *c, scenario_row_t *rows, long n, unsigned l
                 x->state = IT_DEFERRED;
             }
         }
-        /* Banker's requests that fit within the claim, in arrival order. */
+        /* Banker's requests that may go out now, in arrival order. */
         for (long k = 0; k < next && rc == 0 && !g_stop; k++) {
-            item_t *x = &it[k];
+            item_t *x = &rp.it[k];
             if (x->state != IT_DEFERRED)
                 continue;
-            if (outstanding[x->bi] + x->req->units > c->claim[x->bi]) {
-                if (!x->release_ns) {           /* log once */
+            if (rp.all_or_nothing && x->task >= 0) {
+                task_t *t = &rp.tk[x->task];
+                if (t->bundle == 0 && t->rows[0] == k && send_bundle(&rp, t) == -1)
+                    rc = -1;
+                continue;
+            }
+            if (!may_send(&rp, x)) {
+                if (!x->noted && rp.outstanding[x->bi] + x->req->units > c->claim[x->bi]) {
+                    x->noted = 1;
                     c->deferred++;
-                    x->release_ns = -1;
                     LOG_INFO("holding back id=%u resource=%s units=%u: would exceed the claim of %d",
                              x->req->id, relief_resource_name(x->req->resource), x->req->units,
                              c->claim[x->bi]);
                 }
                 continue;
             }
-            if (send_request(c, x->req) == -1)
+            if (send_request_ex(c, x->req, NULL, x->task >= 0 ? rp.tk[x->task].id : 0) == -1)
                 rc = -1;
             x->state = IT_PENDING;
-            outstanding[x->bi] += x->req->units;
+            rp.outstanding[x->bi] += x->req->units;
         }
         if (rc)
             break;
         for (long k = 0; k < next; k++) {
-            if (it[k].state == IT_DEFERRED || it[k].state == IT_PENDING)
+            item_t *x = &rp.it[k];
+            if (x->state == IT_DEFERRED || x->state == IT_PENDING || x->state == IT_WAITING)
                 busy = 1;
-            if (it[k].state == IT_HELD) {
+            if (x->state == IT_HELD) {
                 busy = 1;
-                if (it[k].release_ns < wake)
-                    wake = it[k].release_ns;
+                if (x->release_ns < wake)
+                    wake = x->release_ns;
             }
         }
-        if (next < n && scale_ns) {
-            int64_t due = t0 + (int64_t)it[next].req->arrival * scale_ns;
+        if (next < n && rp.scale_ns) {
+            int64_t due = t0 + (int64_t)rp.it[next].req->arrival * rp.scale_ns;
             if (due < wake)
                 wake = due;
         }
@@ -691,15 +970,20 @@ static long run_scenario(camp_ctx_t *c, scenario_row_t *rows, long n, unsigned l
             dl.tv_nsec -= 1000000000L;
         }
         ssize_t got = mq_timedreceive(c->reply, (char *)&m, sizeof m, NULL, &dl);
-        if (got == (ssize_t)sizeof m && (m.kind == MSG_GRANT || m.kind == MSG_REJECT))
-            on_reply(c, &m, it, n, outstanding, scale_ns);
-        else if (got == -1 && errno != ETIMEDOUT && errno != EINTR) {
+        if (got == (ssize_t)sizeof m &&
+            (m.kind == MSG_GRANT || m.kind == MSG_REJECT || m.kind == MSG_REVOKE)) {
+            if (on_reply(&rp, &m) == -1) {
+                rc = -1;
+                break;
+            }
+        } else if (got == -1 && errno != ETIMEDOUT && errno != EINTR) {
             LOG_ERROR("mq_timedreceive %s: %s", c->reply_name, strerror(errno));
             rc = -1;
             break;
         }
     }
-    free(it);
+    free(rp.it);
+    free(rp.tk);
     return rc < 0 ? -1 : (long)c->sent;
 }
 
@@ -714,12 +998,13 @@ int main(int argc, char **argv)
         { "exit-when-done", no_argument,   NULL, 'x' },
         { "shutdown",   no_argument,       NULL, 'S' },
         { "resources",  required_argument, NULL, 'r' },
+        { "all-or-nothing", no_argument,   NULL, 'a' },
         { "help",       no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
     static camp_ctx_t camp;
     unsigned long id = 0, count = 5, seed = 1, time_scale = DEFAULT_TIME_SCALE;
-    int have_id = 0, have_count = 0, shutdown_only = 0, exit_when_done = 0, opt;
+    int have_id = 0, have_count = 0, shutdown_only = 0, exit_when_done = 0, all_or_nothing = 0, opt;
     const char *scenario = NULL, *resources = NULL;
     scenario_row_t *rows = NULL;
     long sent, nrows = 0;
@@ -727,7 +1012,7 @@ int main(int argc, char **argv)
 
     log_init("camp");
 
-    while ((opt = getopt_long(argc, argv, "i:c:s:f:t:xSr:h", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "i:c:s:f:t:xSr:ah", opts, NULL)) != -1) {
         switch (opt) {
         case 'i':
             if (parse_ulong(optarg, UINT32_MAX / RELIEF_REQ_ID_BASE - 1, &id) == -1 || id == 0) {
@@ -766,6 +1051,9 @@ int main(int argc, char **argv)
             break;
         case 'r':
             resources = optarg;
+            break;
+        case 'a':
+            all_or_nothing = 1;
             break;
         case 'h':
             usage(argv[0]);
@@ -833,7 +1121,7 @@ int main(int argc, char **argv)
     if (scenario) {
         if (!exit_when_done)
             LOG_INFO("camp %u: resident after the replay, until SIGTERM", camp.id);
-        sent = run_scenario(&camp, rows, nrows, time_scale, exit_when_done);
+        sent = run_scenario(&camp, rows, nrows, time_scale, exit_when_done, all_or_nothing);
     } else {
         sent = send_random(&camp, count, seed);
     }

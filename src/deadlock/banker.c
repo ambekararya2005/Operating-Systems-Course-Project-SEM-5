@@ -14,6 +14,7 @@ const char *banker_result_name(banker_result_t r)
     case BANKER_UNAVAILABLE: return "unavailable";
     case BANKER_UNSAFE:      return "unsafe";
     case BANKER_INACTIVE:    return "inactive";
+    case BANKER_ORDER:       return "out_of_order";
     }
     return "?";
 }
@@ -157,4 +158,40 @@ void banker_remove(banker_t *b, int p)
         b->max[p][j] = 0;
     }
     b->active[p] = 0;
+}
+
+int banker_detect(const banker_t *b, const int request[][BANKER_MAX_R], unsigned char deadlocked[])
+{
+    int work[BANKER_MAX_R], progress, stuck = 0;
+    unsigned char finish[BANKER_MAX_P];
+
+    for (int j = 0; j < b->m; j++)
+        work[j] = b->available[j];
+    for (int i = 0; i < b->n; i++) {
+        int holds = 0;
+        for (int j = 0; j < b->m; j++)
+            holds |= b->alloc[i][j] != 0;
+        finish[i] = !b->active[i] || !holds;
+    }
+    do {
+        progress = 0;
+        for (int i = 0; i < b->n; i++) {
+            if (finish[i])
+                continue;
+            int fits = 1;
+            for (int j = 0; j < b->m && fits; j++)
+                fits = request[i][j] <= work[j];
+            if (!fits)
+                continue;
+            for (int j = 0; j < b->m; j++)
+                work[j] += b->alloc[i][j];
+            finish[i] = 1;
+            progress = 1;
+        }
+    } while (progress);
+    for (int i = 0; i < b->n; i++) {
+        deadlocked[i] = !finish[i];
+        stuck += !finish[i];
+    }
+    return stuck;
 }

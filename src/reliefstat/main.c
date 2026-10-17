@@ -11,6 +11,8 @@
  *   reliefstat --banker the Banker's state in textbook layout: Allocation, Max, Need and
  *                       Available per camp (P<id>), plus a safe sequence of the current state
  *                       (the safety algorithm run on the snapshot); with --json, as JSON
+ *   reliefstat --waitfor the wait-for graph of the snapshot as text edges ("camp1 -> camp2 [TRUCK]"),
+ *                       and a cycle if there is one (DFS); --dot: as a Graphviz DOT digraph
  *
  * The segment is mapped PROT_READ: reliefstat can never corrupt it, and it does not take
  * the writers' mutex (locking would write to the mutex). relief_shm_snapshot() copies
@@ -19,6 +21,7 @@
  * Exit status: 0 = reliefd running, 1 = not running or stale segment, 2 = usage error.
  */
 #include "../deadlock/banker.h"     /* src/deadlock is not on the include path */
+#include "../deadlock/waitfor.h"
 #include "relief.h"
 #include "shm.h"
 
@@ -224,6 +227,86 @@ static void print_banker_json(const relief_status_t *st)
     printf("]}");
 }
 
+/* The wait-for graph of the snapshot (active camps only). */
+static int waitfor_from_snapshot(const relief_status_t *st, banker_t *b, waitfor_t *g, int rows[])
+{
+    static int req[BANKER_MAX_P][BANKER_MAX_R];
+    int seq[RELIEF_SHM_CAMPS], len, safe;
+    int n = banker_from_snapshot(st, b, rows, seq, &len, &safe);
+
+    memset(req, 0, sizeof req);
+    for (int p = 0; p < n; p++)
+        for (int j = 0; j < RELIEF_BANKER_RES; j++)
+            req[p][j] = st->bk_proc[rows[p]].request[j];
+    waitfor_build(g, b, (const int (*)[BANKER_MAX_R])req);
+    return n;
+}
+
+static void label_str(unsigned label, char *buf, size_t len)
+{
+    size_t o = 0;
+    buf[0] = '\0';
+    for (int j = 0; j < RELIEF_BANKER_RES && o < len; j++)
+        if (label & (1u << j))
+            o += (size_t)snprintf(buf + o, len - o, "%s%s", o ? "," : "", relief_banker_name((unsigned)j));
+}
+
+static void print_waitfor(const relief_status_t *st, int dot)
+{
+    static waitfor_t g;
+    banker_t b;
+    int rows[RELIEF_SHM_CAMPS], cycle[RELIEF_SHM_CAMPS], clen = 0;
+    unsigned char on_cycle[RELIEF_SHM_CAMPS] = { 0 };
+    char lab[64];
+
+    int n = waitfor_from_snapshot(st, &b, &g, rows);
+    int cyc = waitfor_find_cycle(&g, cycle, &clen);
+    for (int i = 0; i < clen; i++)
+        on_cycle[cycle[i]] = 1;
+    if (dot) {
+        printf("// ReliefOS wait-for graph (--deadlock %s): an edge X -> Y means camp X waits for a\n"
+               "// resource camp Y holds. Render: dot -Tpng waitfor.dot -o waitfor.png\n"
+               "digraph waitfor {\n    rankdir=LR;\n    node [shape=circle, fontname=\"Helvetica\"];\n"
+               "    edge [fontname=\"Helvetica\", fontsize=10];\n",
+               st->dl_mode[0] ? st->dl_mode : "-");
+        for (int p = 0; p < n; p++)
+            printf("    camp%u%s;\n", st->bk_proc[rows[p]].camp,
+                   on_cycle[p] ? " [color=\"#e34948\", penwidth=2]" : "");
+        for (int i = 0; i < n; i++)
+            for (int k = 0; k < n; k++) {
+                if (!g.label[i][k])
+                    continue;
+                int red = 0;
+                for (int c = 0; c < clen; c++)
+                    red |= cycle[c] == i && cycle[(c + 1) % clen] == k;
+                label_str(g.label[i][k], lab, sizeof lab);
+                printf("    camp%u -> camp%u [label=\"%s\"%s];\n", st->bk_proc[rows[i]].camp,
+                       st->bk_proc[rows[k]].camp, lab, red ? ", color=\"#e34948\", penwidth=2" : "");
+            }
+        printf("}\n");
+        return;
+    }
+    printf("wait-for graph (--deadlock %s): %d active camps, %d edges\n", st->dl_mode[0] ? st->dl_mode : "-",
+           n, waitfor_edges(&g));
+    for (int i = 0; i < n; i++)
+        for (int k = 0; k < n; k++)
+            if (g.label[i][k]) {
+                label_str(g.label[i][k], lab, sizeof lab);
+                printf("  camp%u -> camp%u  [%s]\n", st->bk_proc[rows[i]].camp, st->bk_proc[rows[k]].camp, lab);
+            }
+    if (cyc) {
+        printf("cycle: ");
+        for (int i = 0; i <= clen; i++)
+            printf("%scamp%u", i ? " -> " : "", st->bk_proc[rows[cycle[i % clen]]].camp);
+        printf("  (circular wait)\n");
+    } else {
+        printf("no cycle\n");
+    }
+    printf("detector: %llu deadlocks detected, %llu recoveries; last cycle %s\n",
+           (unsigned long long)st->dl_detected, (unsigned long long)st->dl_recoveries,
+           st->dl_last_cycle[0] ? st->dl_last_cycle : "-");
+}
+
 static void print_json(const relief_status_t *st, int running, int64_t now)
 {
     printf("{\"running\":%s,\"daemon_pid\":%d,\"start_time_ms\":%lld,\"uptime_ms\":%lld,"
@@ -311,10 +394,11 @@ static void print_table(const relief_status_t *st, int running, int64_t now)
 
 static void usage(const char *prog)
 {
-    fprintf(stderr, "usage: %s [--sched | --banker] [--json]\n"
+    fprintf(stderr, "usage: %s [--sched | --banker [--json] | --waitfor [--dot]] [--json]\n"
                     "Print reliefd's live status table (POSIX shared memory %s).\n"
                     "  --sched  only the live scheduler: policy, ready queue, teams\n"
-                    "  --banker only the Banker's state: Allocation, Max, Need, Available, safe sequence\n",
+                    "  --banker only the Banker's state: Allocation, Max, Need, Available, safe sequence\n"
+                    "  --waitfor the wait-for graph (text edges and any cycle); --dot: Graphviz DOT\n",
             prog, RELIEF_SHM_NAME);
 }
 
@@ -324,24 +408,28 @@ int main(int argc, char **argv)
         { "json", no_argument, NULL, 'j' },
         { "sched", no_argument, NULL, 's' },
         { "banker", no_argument, NULL, 'b' },
+        { "waitfor", no_argument, NULL, 'w' },
+        { "dot", no_argument, NULL, 'd' },
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
     relief_status_t st;
     const relief_shm_t *shm;
-    int json = 0, sched_only = 0, banker_only = 0, opt, running;
+    int json = 0, sched_only = 0, banker_only = 0, waitfor = 0, dot = 0, opt, running;
     int64_t now;
 
-    while ((opt = getopt_long(argc, argv, "jsbh", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "jsbwdh", opts, NULL)) != -1) {
         switch (opt) {
         case 'j': json = 1; break;
         case 's': sched_only = 1; break;
         case 'b': banker_only = 1; break;
+        case 'w': waitfor = 1; break;
+        case 'd': dot = 1; break;
         case 'h': usage(argv[0]); return 0;
         default:  usage(argv[0]); return 2;
         }
     }
-    if (optind < argc || (sched_only && banker_only)) {
+    if (optind < argc || sched_only + banker_only + waitfor > 1 || (dot && !waitfor)) {
         usage(argv[0]);
         return 2;
     }
@@ -365,7 +453,9 @@ int main(int argc, char **argv)
 
     now = relief_now_ms();
     running = pid_alive((pid_t)st.daemon_pid);
-    if (banker_only && json) {
+    if (waitfor) {
+        print_waitfor(&st, dot);
+    } else if (banker_only && json) {
         print_banker_json(&st);
         printf("\n");
     } else if (banker_only) {

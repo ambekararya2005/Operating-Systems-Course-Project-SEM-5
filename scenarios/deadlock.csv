@@ -1,0 +1,12 @@
+arrival_min,camp_id,severity,resource,quantity,service_time,task
+# A reproducible circular wait (run with --resources scenarios/deadlock_resources.conf: 2 trucks,
+# 2 boats). Rows sharing the 7th column form one task: acquired one after another, held until the
+# last is granted, released together after the longest service time (hold and wait).
+# By minute 2 camp 1 holds a truck and a boat, camp 2 holds a truck and a boat; at minute 10 each
+# asks for the other's: camp 1 for a truck (camp 2 has it), camp 2 for a boat (camp 1 has it).
+0,1,URGENT,TRUCK,1,30,1
+0,1,URGENT,BOAT,1,30,1
+10,1,URGENT,TRUCK,1,30,1
+2,2,ROUTINE,BOAT,1,30,1
+2,2,ROUTINE,TRUCK,1,30,1
+10,2,ROUTINE,BOAT,1,30,1

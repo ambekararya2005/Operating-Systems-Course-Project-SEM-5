@@ -118,7 +118,7 @@ static void camp_spawn(camp_table_t *t, camp_t *c)
     snprintf(id_arg, sizeof id_arg, "%u", c->id);
     snprintf(seed_arg, sizeof seed_arg, "%lu", t->seed);
     snprintf(scale_arg, sizeof scale_arg, "%lu", t->time_scale_ms);
-    char *argv[16];         /* 13 used at most; keep spare room */
+    char *argv[16];         /* 14 used at most; keep spare room */
     int argc = 0;
 
     argv[argc++] = t->camp_bin;
@@ -136,6 +136,8 @@ static void camp_spawn(camp_table_t *t, camp_t *c)
         argv[argc++] = "--resources";
         argv[argc++] = t->resources;
     }
+    if (t->all_or_nothing)
+        argv[argc++] = "--all-or-nothing";
     argv[argc] = NULL;
 
     pid = fork();

@@ -32,7 +32,8 @@ typedef enum {
     BANKER_OVER_CLAIM,      /* request > Need: the process broke its declared maximum (error) */
     BANKER_UNAVAILABLE,     /* request > Available: the process must wait */
     BANKER_UNSAFE,          /* granting would leave an unsafe state: rolled back, must wait */
-    BANKER_INACTIVE         /* no such active process */
+    BANKER_INACTIVE,        /* no such active process */
+    BANKER_ORDER            /* --deadlock prevent: requested out of resource order (rejected) */
 } banker_result_t;
 
 const char *banker_result_name(banker_result_t r);
@@ -65,5 +66,13 @@ int banker_release(banker_t *b, int p, const int rel[]);
 
 /* Process p terminates: everything it holds is released and it becomes inactive. */
 void banker_remove(banker_t *b, int p);
+
+/* Deadlock detection for several instances per resource type (Silberschatz):
+ *   Work = Available; Finish[i] = (Allocation_i == 0) for every active i.
+ *   Find an i with Finish[i] == false and Request_i <= Work: Work += Allocation_i, Finish[i] = true.
+ *   Processes left with Finish[i] == false are deadlocked.
+ * request[i] is what process i is waiting for right now. Writes deadlocked[i] (1/0) for every
+ * process and returns how many are deadlocked. */
+int banker_detect(const banker_t *b, const int request[][BANKER_MAX_R], unsigned char deadlocked[]);
 
 #endif /* RELIEF_BANKER_H */

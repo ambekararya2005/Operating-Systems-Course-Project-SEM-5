@@ -36,14 +36,14 @@ LDLIBS   := -lrt -lm
 
 OBJ        := $(BUILD)/obj
 COMMON_SRC := src/common/log.c src/common/shm.c src/common/rwsync.c src/common/resconf.c
-DEADLOCK_SRC := src/deadlock/banker.c src/deadlock/deadlock.c
+DEADLOCK_SRC := src/deadlock/banker.c src/deadlock/deadlock.c src/deadlock/waitfor.c
 SCHED_POLICY_SRC := src/sched/sched.c src/sched/fcfs.c src/sched/sjf.c src/sched/srtf.c \
                     src/sched/rr.c src/sched/prio.c src/sched/mlfq.c
 RELIEFD_SRC := src/reliefd/main.c src/reliefd/camps.c src/reliefd/dispatch.c src/reliefd/dock.c \
                src/reliefd/inventory.c src/reliefd/resmgr.c $(COMMON_SRC) $(DEADLOCK_SRC) \
                $(SCHED_POLICY_SRC)
 CAMP_SRC    := src/camp/main.c $(COMMON_SRC)
-RELIEFSTAT_SRC := src/reliefstat/main.c src/common/shm.c src/deadlock/banker.c
+RELIEFSTAT_SRC := src/reliefstat/main.c src/common/shm.c src/deadlock/banker.c src/deadlock/waitfor.c
 
 RELIEFD_OBJ := $(RELIEFD_SRC:%.c=$(OBJ)/%.o)
 CAMP_OBJ    := $(CAMP_SRC:%.c=$(OBJ)/%.o)
@@ -58,7 +58,7 @@ RACELAB_SRC := src/racelab/main.c
 RACELAB_OBJ := $(RACELAB_SRC:%.c=$(OBJ)/%.o)
 RWLAB_SRC := src/rwlab/main.c src/common/rwsync.c
 RWLAB_OBJ := $(RWLAB_SRC:%.c=$(OBJ)/%.o)
-TEST_BANKER_SRC := tests/test_banker.c src/deadlock/banker.c
+TEST_BANKER_SRC := tests/test_banker.c src/deadlock/banker.c src/deadlock/deadlock.c src/deadlock/waitfor.c
 TEST_BANKER_OBJ := $(TEST_BANKER_SRC:%.c=$(OBJ)/%.o)
 # Unit tests of the Phase 3 sync code: the loading dock's bounded buffer and both rwsync kinds.
 TEST_SYNC_SRC := tests/test_sync.c src/reliefd/dock.c src/reliefd/inventory.c $(COMMON_SRC)
