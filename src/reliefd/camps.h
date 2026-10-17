@@ -44,6 +44,11 @@ typedef struct {
     int           shutting_down;    /* no restarts once set */
     int           dirty;            /* table changed since the last camps_save() */
     char          pids_path[CAMPS_PATH_MAX];   /* $RELIEF_HOME/camps.pids, "" = don't publish */
+    char          resources[CAMPS_PATH_MAX];   /* resources.conf passed to camps, "" = none */
+    /* Called (on the main thread) whenever a camp process has terminated, before any restart:
+     * the resource manager releases everything that camp held. May be NULL. */
+    void        (*on_exit)(void *ctx, uint32_t camp_id);
+    void         *exit_ctx;
 } camp_table_t;
 
 const char *camp_state_name(camp_state_t s);

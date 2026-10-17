@@ -10,12 +10,17 @@
  *   - hands RESCUE requests to the live scheduler (dispatch.c) and kit requests to the
  *     loading dock (dock.c: warehouse producers -> bounded buffer -> trucks), which updates
  *     the inventory (inventory.c, readers-writers)
- * Deadlock control, allocators etc. arrive in later phases.
+ *   - decides vehicle and kit requests with the deadlock policy (resmgr.c, --deadlock avoid:
+ *     the Banker's algorithm); camps release vehicles/crates with MSG_RELEASE after use
+ * Allocators etc. arrive in later phases.
  */
 #include "camps.h"
 #include "dispatch.h"
 #include "dock.h"
 #include "inventory.h"
+#include "resconf.h"
+#include "resmgr.h"
+#include "../deadlock/deadlock.h"   /* src/deadlock is not on the include path */
 #include "log.h"
 #include "relief.h"
 #include "shm.h"
@@ -47,6 +52,7 @@
 #define DEFAULT_PRODUCERS    2       /* warehouse producer threads */
 #define DEFAULT_TRUCKS       4       /* truck consumer threads */
 #define DEFAULT_RW           "rwlock"
+#define DEFAULT_DEADLOCK     "avoid"
 
 static volatile sig_atomic_t g_stop = 0;     /* signal number that requested shutdown */
 static volatile sig_atomic_t g_child = 0;    /* SIGCHLD seen: reap in the main loop */
@@ -150,11 +156,28 @@ static int default_camp_bin(char *out, size_t len)
 }
 
 typedef struct {
-    unsigned long counts[MSG_SHUTDOWN + 1];
+    unsigned long counts[MSG_KIND_COUNT];
     relief_shm_t *shm;      /* live status table (total_requests) */
     dispatcher_t *disp;     /* live scheduler: RESCUE requests go here */
     dock_t       *dock;     /* loading dock: kit requests go here */
+    resmgr_t     *rm;       /* Banker's resources: vehicle and MED/FOOD kit requests go here first */
 } stats_t;
+
+/* Allocator thread, after a grant: kits continue to the loading dock. */
+static void on_grant(void *ctx, const relief_request_t *req)
+{
+    stats_t *st = ctx;
+    if (dock_handles(req->resource) && st->dock && dock_submit(st->dock, req) == -1)
+        EV_WARN("dock_submit_failed", "id=%u reason=ENOMEM", req->id);
+}
+
+/* Main thread, a camp process ended: everything it held is released. */
+static void on_camp_exit(void *ctx, uint32_t camp)
+{
+    stats_t *st = ctx;
+    if (st->rm)
+        resmgr_camp_gone(st->rm, camp, "exit", 1);
+}
 
 /* Lock the status table. Every reliefd lock site goes through here, so a robust-mutex
  * recovery (a writer died holding the lock) is always logged, whichever path finds it. */
@@ -171,31 +194,43 @@ static int handle_message(const relief_msg_t *m, camp_table_t *camps, stats_t *s
 {
     const relief_request_t *r = &m->u.req;
 
-    if (m->kind >= MSG_HELLO && m->kind <= MSG_SHUTDOWN)
+    if (m->kind >= MSG_HELLO && m->kind < MSG_KIND_COUNT)
         st->counts[m->kind]++;
 
     switch (m->kind) {
     case MSG_HELLO:
         EV_INFO("hello", "camp=%u camp_pid=%d", m->camp_id, m->camp_pid);
         camps_on_hello(camps, m->camp_id, m->camp_pid);
+        if (st->rm)
+            resmgr_hello(st->rm, m->camp_id, &m->u.hello);
         return 0;
     case MSG_BYE:
         EV_INFO("bye", "camp=%u camp_pid=%d", m->camp_id, m->camp_pid);
+        if (st->rm)
+            resmgr_camp_gone(st->rm, m->camp_id, "bye", 0);
+        return 0;
+    case MSG_RELEASE:
+        if (st->rm)
+            resmgr_release(st->rm, r);
         return 0;
     case MSG_REQUEST: {
-        /* RESCUE requests are CPU-scheduled jobs (teams = CPUs); kit requests go to the
-         * loading dock. Vehicle requests (TRUCK, BOAT) are logged only: devices come later. */
+        /* RESCUE requests are CPU-scheduled jobs (teams = CPUs). TRUCK, BOAT, MED_KIT and
+         * FOOD_KIT go to the Banker's resource manager first; kits continue to the loading dock
+         * once granted (HYGIENE_KIT goes straight there). */
         int sched = r->resource == RES_RESCUE && st->disp != NULL;
+        int banker = relief_banker_index(r->resource) >= 0 && r->units > 0 && st->rm != NULL;
         int dock = dock_handles(r->resource) && st->dock != NULL;
         EV_INFO("request", "id=%u camp=%u camp_pid=%d severity=%s resource=%s qty=%u service=%u "
-                "arrival=%u alert=%d orig_severity=%s sched=%d dock=%d",
+                "arrival=%u alert=%d orig_severity=%s sched=%d dock=%d banker=%d units=%u",
                 r->id, r->camp_id, r->camp_pid, relief_severity_name(r->severity),
                 relief_resource_name(r->resource), r->quantity, r->service_time, r->arrival,
                 (r->flags & REQ_FLAG_ALERT) ? 1 : 0, relief_severity_name(r->orig_severity), sched,
-                dock);
+                dock, banker, r->units);
         if (sched)
             dispatch_submit(st->disp, r);
-        if (dock && dock_submit(st->dock, r) == -1)
+        if (banker)
+            resmgr_submit(st->rm, r);
+        else if (dock && dock_submit(st->dock, r) == -1)
             EV_WARN("dock_submit_failed", "id=%u reason=ENOMEM", r->id);
         if (st->shm && status_lock(st->shm) != -1) {
             st->shm->data.total_requests++;
@@ -241,7 +276,8 @@ static void usage(const char *prog)
     fprintf(stderr,
             "usage: %s [--camps FILE] [--scenario FILE] [--seed N] [--time-scale MS] [--exit-when-done]\n"
             "          [--policy NAME] [--teams N] [--quantum Q] [--age MIN] [--preemptive on|off]\n"
-            "          [--dock N] [--producers P] [--trucks C] [--rw semaphore|rwlock] [--camp-bin PATH]\n"
+            "          [--dock N] [--producers P] [--trucks C] [--rw semaphore|rwlock]\n"
+            "          [--deadlock avoid|none|prevent|detect] [--resources FILE] [--camp-bin PATH]\n"
             "  --camps     camps config, one \"<id> <name>\" per line (default %s)\n"
             "  --scenario  scenario CSV passed to every camp (default %s)\n"
             "  --seed      seed passed to every camp (default 1)\n"
@@ -257,11 +293,14 @@ static void usage(const char *prog)
             "  --trucks    truck consumer threads, 1-%d (default %d)\n"
             "  --rw        inventory readers-writers lock: semaphore (readers preference) or\n"
             "              rwlock (writer preference) (default %s)\n"
+            "  --deadlock  deadlock handling for vehicle/kit requests (default %s: Banker's algorithm;\n"
+            "              none, prevent and detect are not implemented yet)\n"
+            "  --resources Banker's resource totals (default %s)\n"
             "  --camp-bin  camp executable (default: camp next to reliefd)\n",
             prog, DEFAULT_CAMPS_CONF, DEFAULT_SCENARIO, DEFAULT_TIME_SCALE, DEFAULT_POLICY,
             RELIEF_SHM_TEAMS, DEFAULT_TEAMS, DEFAULT_QUANTUM, DEFAULT_AGE, DOCK_MAX_CAPACITY,
             DEFAULT_DOCK, DOCK_MAX_PRODUCERS, DEFAULT_PRODUCERS, DOCK_MAX_TRUCKS, DEFAULT_TRUCKS,
-            DEFAULT_RW);
+            DEFAULT_RW, DEFAULT_DEADLOCK, RELIEF_RESOURCES_CONF);
 }
 
 int main(int argc, char **argv)
@@ -282,6 +321,8 @@ int main(int argc, char **argv)
         { "producers", required_argument, NULL, 'P' },
         { "trucks",   required_argument, NULL, 'C' },
         { "rw",       required_argument, NULL, 'w' },
+        { "deadlock", required_argument, NULL, 'L' },
+        { "resources", required_argument, NULL, 'R' },
         { "help",     no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
@@ -291,7 +332,10 @@ int main(int argc, char **argv)
     const char *camp_bin = NULL;
     const char *home = getenv("RELIEF_HOME");
     char pidpath[CAMPS_PATH_MAX], logdir[CAMPS_PATH_MAX], logpath[CAMPS_PATH_MAX];
-    stats_t st = { { 0 }, NULL, NULL, NULL };
+    stats_t st = { { 0 }, NULL, NULL, NULL, NULL };
+    resmgr_config_t rcfg = { DEFAULT_DEADLOCK, RELIEF_BANKER_DEFAULT_TOTALS, 0, on_grant, &st };
+    const char *resources = RELIEF_RESOURCES_CONF;
+    char rerr[CAMPS_PATH_MAX + 128] = "";
     dock_config_t kcfg = { DEFAULT_DOCK, DEFAULT_PRODUCERS, DEFAULT_TRUCKS, 0, NULL };
     const char *rw_kind = DEFAULT_RW;
     inventory_t *inv = NULL;
@@ -305,7 +349,7 @@ int main(int argc, char **argv)
     camps.seed = 1;
     camps.time_scale_ms = DEFAULT_TIME_SCALE;
 
-    while ((opt = getopt_long(argc, argv, "c:s:S:t:xp:n:q:a:e:b:D:P:C:w:h", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:s:S:t:xp:n:q:a:e:b:D:P:C:w:L:R:h", opts, NULL)) != -1) {
         char *end;
         switch (opt) {
         case 'c': camps_conf = optarg; break;
@@ -379,6 +423,21 @@ int main(int argc, char **argv)
             }
             rw_kind = optarg;
             break;
+        case 'L': {
+            const deadlock_policy_t *pol = deadlock_policy_find(optarg);
+            if (!pol) {
+                fprintf(stderr, "invalid --deadlock (%s): %s\n", deadlock_policy_names(), optarg);
+                return 2;
+            }
+            if (!pol->request) {
+                fprintf(stderr, "--deadlock %s (%s) is not implemented yet; use avoid\n", pol->name,
+                        pol->what);
+                return 2;
+            }
+            rcfg.mode = pol->name;
+            break;
+        }
+        case 'R': resources = optarg; break;
         case 'h': usage(argv[0]); return 0;
         default:  usage(argv[0]); return 2;
         }
@@ -421,6 +480,11 @@ int main(int argc, char **argv)
     }
     if (!realpath(scenario, camps.scenario)) {
         LOG_ERROR("scenario %s: %s", scenario, strerror(errno));
+        goto fail_log;
+    }
+    if (relief_resources_load(resources, rcfg.total, rerr, sizeof rerr) == -1 ||
+        !realpath(resources, camps.resources)) {
+        LOG_ERROR("resources: %s", rerr[0] ? rerr : strerror(errno));
         goto fail_log;
     }
     if (camps_load(&camps, camps_conf) == -1)
@@ -483,7 +547,12 @@ int main(int argc, char **argv)
         kcfg.inv = inv;
         st.dock = dock_start(&kcfg);
     }
-    if (!st.dock) {
+    if (st.dock) {
+        rcfg.time_scale_ms = camps.time_scale_ms;
+        st.rm = resmgr_start(&rcfg);
+    }
+    if (!st.rm) {
+        dock_stop(st.dock);
         dispatch_stop(st.disp);
         inventory_free(inv);
         unlink(pidpath);
@@ -494,6 +563,9 @@ int main(int argc, char **argv)
     }
     dock_publish(st.dock, st.shm);
     inventory_publish(inv, st.shm);
+    resmgr_publish(st.rm, st.shm);
+    camps.on_exit = on_camp_exit;
+    camps.exit_ctx = &st;
     camps_spawn_all(&camps);
     camps_publish_shm(&camps, st.shm);
     camps_save(&camps);
@@ -507,6 +579,7 @@ int main(int argc, char **argv)
          * check below and mq_timedreceive as short as possible. */
         dock_publish(st.dock, st.shm);
         inventory_publish(inv, st.shm);
+        resmgr_publish(st.rm, st.shm);
         if (g_child) {
             g_child = 0;            /* clear before reaping so no SIGCHLD is lost */
             camps_reap(&camps, 0);
@@ -555,6 +628,8 @@ int main(int argc, char **argv)
      * then the dock (pending orders abandoned, trucks stopped with poison pills). */
     dispatch_stop(st.disp);
     st.disp = NULL;
+    resmgr_stop(st.rm);         /* waiting Banker's requests are abandoned */
+    st.rm = NULL;
     dock_stop(st.dock);
     st.dock = NULL;
     inventory_free(inv);

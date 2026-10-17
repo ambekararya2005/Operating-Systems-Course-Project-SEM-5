@@ -1,0 +1,151 @@
+/*
+ * OS concept: Deadlock avoidance — the Banker's algorithm — Unit 3
+ *
+ * Unit tests for src/deadlock/banker.c on the standard textbook example (Silberschatz,
+ * "Operating System Concepts", Banker's algorithm example): 5 processes P0..P4 and three
+ * resource types with A = 10, B = 5, C = 7 instances.
+ *
+ *            Allocation   Max       Need      Available
+ *            A  B  C      A  B  C   A  B  C   A  B  C
+ *       P0   0  1  0      7  5  3   7  4  3   3  3  2
+ *       P1   2  0  0      3  2  2   1  2  2
+ *       P2   3  0  2      9  0  2   6  0  0
+ *       P3   2  1  1      2  2  2   0  1  1
+ *       P4   0  0  2      4  3  3   4  3  1
+ *
+ * Expected answers (worked by hand below each test):
+ *   1. the state is safe, with the safe sequence <P1, P3, P4, P0, P2>
+ *   2. P1 requests (1,0,2): granted; the new state is safe, again <P1, P3, P4, P0, P2>
+ *   3. then P4 requests (3,3,0): denied, the resources are not available (Available = 2 3 0)
+ *   4. then P0 requests (0,2,0): denied as unsafe, although 0 2 0 <= Available
+ *   5. on the original state, P4 (3,3,0) is available but unsafe: denied
+ *   6. a request above Need is an error (over claim); release and remove return resources
+ * Exit status 0 if every check passed.
+ */
+#include "../src/deadlock/banker.h"
+
+#include <stdio.h>
+#include <string.h>
+
+static int g_checks, g_failed;
+
+#define CHECK(cond, ...) do {                                         \
+        g_checks++;                                                   \
+        if (!(cond)) {                                                \
+            g_failed++;                                               \
+            fprintf(stderr, "FAIL %s:%d: ", __FILE__, __LINE__);      \
+            fprintf(stderr, __VA_ARGS__);                             \
+            fprintf(stderr, "\n");                                    \
+        }                                                             \
+    } while (0)
+
+static const int TOTAL[3] = { 10, 5, 7 };
+static const int MAX[5][3] = { { 7, 5, 3 }, { 3, 2, 2 }, { 9, 0, 2 }, { 2, 2, 2 }, { 4, 3, 3 } };
+static const int ALLOC[5][3] = { { 0, 1, 0 }, { 2, 0, 0 }, { 3, 0, 2 }, { 2, 1, 1 }, { 0, 0, 2 } };
+
+static void textbook(banker_t *b)
+{
+    banker_init(b, 5, 3, TOTAL);
+    for (int p = 0; p < 5; p++) {
+        CHECK(banker_set_max(b, p, MAX[p]) == 0, "set_max P%d", p);
+        CHECK(banker_set_alloc(b, p, ALLOC[p]) == 0, "set_alloc P%d", p);
+    }
+}
+
+static const char *fmt_seq(const int *seq, int len, char *buf, size_t size)
+{
+    size_t o = 0;
+    o += (size_t)snprintf(buf + o, size - o, "<");
+    for (int i = 0; i < len && o < size; i++)
+        o += (size_t)snprintf(buf + o, size - o, "%sP%d", i ? ", " : "", seq[i]);
+    if (o < size)
+        snprintf(buf + o, size - o, ">");
+    return buf;
+}
+
+static int vec_eq(const int *a, int x, int y, int z)
+{
+    return a[0] == x && a[1] == y && a[2] == z;
+}
+
+int main(void)
+{
+    banker_t b;
+    int seq[BANKER_MAX_P], len;
+    char buf[128];
+    const int expected[5] = { 1, 3, 4, 0, 2 };
+
+    /* 1. Available = (10,5,7) - column sums (7,2,5) = (3,3,2). Safety, passes over P0..P4:
+     *    Work 3 3 2: P0 needs 7 4 3 no; P1 1 2 2 yes -> Work 5 3 2; P2 6 0 0 no;
+     *    P3 0 1 1 yes -> 7 4 3; P4 4 3 1 yes -> 7 4 5. Next pass: P0 7 4 3 yes -> 7 5 5;
+     *    P2 6 0 0 yes -> 10 5 7. Safe: <P1, P3, P4, P0, P2>. */
+    textbook(&b);
+    CHECK(vec_eq(b.available, 3, 3, 2), "Available should be 3 3 2, got %d %d %d", b.available[0],
+          b.available[1], b.available[2]);
+    CHECK(banker_need(&b, 0, 0) == 7 && banker_need(&b, 0, 1) == 4 && banker_need(&b, 0, 2) == 3 &&
+          banker_need(&b, 4, 0) == 4 && banker_need(&b, 4, 1) == 3 && banker_need(&b, 4, 2) == 1,
+          "Need P0 should be 7 4 3 and P4 4 3 1");
+    CHECK(banker_is_safe(&b, seq, &len) == 1 && len == 5 && memcmp(seq, expected, sizeof expected) == 0,
+          "initial state: expected safe <P1, P3, P4, P0, P2>, got %s", fmt_seq(seq, len, buf, sizeof buf));
+    printf("ok   textbook state is safe: %s\n", fmt_seq(seq, len, buf, sizeof buf));
+
+    /* 2. P1 requests (1,0,2): 1 0 2 <= Need 1 2 2 and <= Available 3 3 2. Pretend:
+     *    Available 2 3 0, Allocation P1 3 0 2, Need P1 0 2 0. Safety: Work 2 3 0: P0 no;
+     *    P1 0 2 0 yes -> 5 3 2; P2 no; P3 yes -> 7 4 3; P4 yes -> 7 4 5; P0 yes -> 7 5 5;
+     *    P2 yes -> 10 5 7. Safe <P1, P3, P4, P0, P2>: granted. */
+    const int p1_req[3] = { 1, 0, 2 };
+    banker_result_t r = banker_request(&b, 1, p1_req, seq, &len);
+    CHECK(r == BANKER_GRANT, "P1 (1,0,2) should be granted, got %s", banker_result_name(r));
+    CHECK(len == 5 && memcmp(seq, expected, sizeof expected) == 0,
+          "after P1's grant: expected <P1, P3, P4, P0, P2>, got %s", fmt_seq(seq, len, buf, sizeof buf));
+    CHECK(vec_eq(b.available, 2, 3, 0) && vec_eq(b.alloc[1], 3, 0, 2), "after P1's grant: Available 2 3 0, "
+          "Allocation P1 3 0 2");
+    printf("ok   P1 requests (1,0,2): granted, safe sequence %s, Available 2 3 0\n",
+           fmt_seq(seq, len, buf, sizeof buf));
+
+    /* 3. P4 requests (3,3,0): 3 3 0 <= Need 4 3 1, but A: 3 > Available 2. Denied: not available. */
+    const int p4_req[3] = { 3, 3, 0 };
+    r = banker_request(&b, 4, p4_req, seq, &len);
+    CHECK(r == BANKER_UNAVAILABLE, "P4 (3,3,0) should be denied (unavailable), got %s", banker_result_name(r));
+    CHECK(vec_eq(b.available, 2, 3, 0) && vec_eq(b.alloc[4], 0, 0, 2), "a denied request must change nothing");
+    printf("ok   P4 requests (3,3,0): denied, resources not available (Available 2 3 0)\n");
+
+    /* 4. P0 requests (0,2,0): <= Need 7 4 3 and <= Available 2 3 0. Pretend: Available 2 1 0,
+     *    Need P0 7 2 3. Safety: Work 2 1 0: P0 7 2 3 no, P1 0 2 0 no (B 2 > 1), P2 6 0 0 no,
+     *    P3 0 1 1 no (C 1 > 0), P4 4 3 1 no. Nobody can finish: unsafe, rolled back. */
+    const int p0_req[3] = { 0, 2, 0 };
+    r = banker_request(&b, 0, p0_req, seq, &len);
+    CHECK(r == BANKER_UNSAFE, "P0 (0,2,0) should be denied as unsafe, got %s", banker_result_name(r));
+    CHECK(vec_eq(b.available, 2, 3, 0) && vec_eq(b.alloc[0], 0, 1, 0), "the unsafe request must be rolled back");
+    printf("ok   P0 requests (0,2,0): denied as unsafe and rolled back\n");
+
+    /* 5. Original state, P4 requests (3,3,0): available (3 3 2) but leaves Work 0 0 2 with
+     *    Need P4 1 0 1: P3 0 1 1 no (B), P1 1 2 2 no, ... unsafe. */
+    textbook(&b);
+    r = banker_request(&b, 4, p4_req, seq, &len);
+    CHECK(r == BANKER_UNSAFE, "original state: P4 (3,3,0) should be unsafe, got %s", banker_result_name(r));
+    printf("ok   original state, P4 requests (3,3,0): available but unsafe, denied\n");
+
+    /* 6. Errors, release, remove. P1 Need is 1 2 2: asking for 2 0 0 exceeds the claim. */
+    const int over[3] = { 2, 0, 0 };
+    CHECK(banker_request(&b, 1, over, seq, &len) == BANKER_OVER_CLAIM, "P1 (2,0,0) exceeds Need 1 2 2");
+    const int rel[3] = { 1, 0, 0 }, too_much[3] = { 3, 0, 0 };
+    CHECK(banker_release(&b, 1, too_much) == -1, "P1 cannot release 3 A (holds 2)");
+    CHECK(banker_release(&b, 1, rel) == 0 && vec_eq(b.available, 4, 3, 2) && vec_eq(b.alloc[1], 1, 0, 0),
+          "P1 releases 1 A: Available 4 3 2");
+    banker_remove(&b, 2);                   /* P2 terminates: its 3 0 2 return */
+    CHECK(vec_eq(b.available, 7, 3, 4) && !b.active[2], "P2 removed: Available 7 3 4, P2 inactive");
+    CHECK(banker_is_safe(&b, seq, &len) == 1 && len == 4, "4 active processes, still safe");
+    CHECK(banker_request(&b, 2, rel, seq, &len) == BANKER_INACTIVE, "an inactive process cannot request");
+    const int bad_max[3] = { 11, 0, 0 };
+    CHECK(banker_set_max(&b, 2, bad_max) == -1, "a claim above the total is refused");
+    CHECK(banker_set_max(&b, 1, MAX[1]) == -1, "a claim cannot be re-declared while holding resources");
+    printf("ok   over-claim is an error; release and termination return resources\n");
+
+    if (g_failed) {
+        fprintf(stderr, "test_banker: %d of %d checks FAILED\n", g_failed, g_checks);
+        return 1;
+    }
+    printf("ok   test_banker: all %d checks passed\n", g_checks);
+    return 0;
+}

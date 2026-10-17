@@ -89,7 +89,7 @@ stop_reliefd
 kits=$(awk -F, 'NR > 1 && $4 ~ /_KIT$/' "$SCEN" | wc -l)
 [[ $(count ' event=request .* dock=1') -eq $kits && $kits -gt 0 ]] || fail "expected $kits kit requests sent to the dock"
 [[ $(count ' event=request .* resource=\(RESCUE\|TRUCK\|BOAT\) .* dock=1') -eq 0 ]] || fail "a non-kit request went to the dock"
-sed -n 's/.* event=request id=\([0-9]*\) .* dock=1$/\1/p' "$LOG" | sort -n > "$RELIEF_HOME/want"
+sed -n 's/.* event=request id=\([0-9]*\) .* dock=1 .*/\1/p' "$LOG" | sort -n > "$RELIEF_HOME/want"
 for ev in produce consume deliver; do
     ids "$ev" > "$RELIEF_HOME/$ev"
     cmp -s "$RELIEF_HOME/want" "$RELIEF_HOME/$ev" \

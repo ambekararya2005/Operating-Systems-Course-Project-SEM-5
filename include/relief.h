@@ -21,6 +21,8 @@
 #define RELIEF_LOG_DIR      "logs"          /* under $RELIEF_HOME */
 #define RELIEF_LOG_FILE     "reliefd.log"   /* structured key=value log */
 #define RELIEF_CAMPS_PIDS   "camps.pids"    /* camp table for reliefctl: "<id> <pid> <state> <name>" */
+#define RELIEF_REPLY_MQ_FMT "/reliefos_camp_%u"  /* per-camp reply queue (reliefd -> camp), by camp id */
+#define RELIEF_RESOURCES_CONF "scenarios/resources.conf"
 
 /* Request ids are camp_id * RELIEF_REQ_ID_BASE + sequence, so they are unique and reproducible. */
 #define RELIEF_REQ_ID_BASE  1000000U
@@ -44,11 +46,25 @@ typedef enum {
 } relief_resource_t;
 
 typedef enum {
-    MSG_HELLO    = 1,
-    MSG_REQUEST  = 2,
-    MSG_BYE      = 3,
-    MSG_SHUTDOWN = 4
+    MSG_HELLO    = 1,       /* camp -> reliefd: u.hello (maximum claim) */
+    MSG_REQUEST  = 2,       /* camp -> reliefd: u.req */
+    MSG_BYE      = 3,       /* camp -> reliefd */
+    MSG_SHUTDOWN = 4,       /* admin -> reliefd */
+    MSG_RELEASE  = 5,       /* camp -> reliefd: u.req (id, resource, units) handed back */
+    MSG_GRANT    = 6,       /* reliefd -> camp reply queue: u.req of the granted request */
+    MSG_REJECT   = 7,       /* reliefd -> camp reply queue: u.req of a request that exceeds the claim */
+    MSG_KIND_COUNT
 } relief_msg_kind_t;
+
+/* ---- Banker's algorithm resources (Phase 3, deadlock avoidance) ----------------------------
+ * Four of the request resources are managed by the Banker's algorithm, in this order (the
+ * column order of every Allocation/Max/Need/Available vector). Vehicles count one unit per
+ * vehicle; kits count in crates of RELIEF_KITS_PER_CRATE kits. Totals come from
+ * scenarios/resources.conf (defaults below). */
+#define RELIEF_BANKER_RES       4
+#define RELIEF_KITS_PER_CRATE   10
+enum { BK_TRUCK = 0, BK_BOAT = 1, BK_MED_KIT = 2, BK_FOOD_KIT = 3 };
+#define RELIEF_BANKER_DEFAULT_TOTALS { 3, 2, 40, 60 }
 
 /* relief_request_t.flags */
 #define REQ_FLAG_ALERT      0x01    /* escalated to CRITICAL by an evacuation alert (SIGUSR1) */
@@ -65,8 +81,15 @@ typedef struct {
     uint32_t arrival;
     uint8_t  flags;         /* REQ_FLAG_* */
     uint8_t  orig_severity; /* severity before any escalation */
-    uint16_t _pad;
+    uint16_t units;         /* Banker's units asked for (vehicles, kit crates); 0 = not a Banker resource */
 } relief_request_t;
+
+/* HELLO payload: the camp's maximum claim per Banker's resource, declared up front. */
+#define HELLO_FLAG_REPLY_QUEUE  0x01    /* the camp reads grants on its RELIEF_REPLY_MQ_FMT queue */
+typedef struct {
+    uint16_t max_claim[RELIEF_BANKER_RES];
+    uint32_t flags;         /* HELLO_FLAG_* */
+} relief_hello_t;
 
 /* Fixed-size message placed on the queue. */
 typedef struct {
@@ -75,7 +98,8 @@ typedef struct {
     int32_t  camp_pid;
     uint32_t _pad;
     union {
-        relief_request_t req;   /* valid when kind == MSG_REQUEST */
+        relief_request_t req;   /* MSG_REQUEST, MSG_RELEASE, MSG_GRANT, MSG_REJECT */
+        relief_hello_t   hello; /* MSG_HELLO */
         uint8_t raw[RELIEF_MSG_SIZE - 16];
     } u;
 } relief_msg_t;
@@ -87,6 +111,32 @@ static inline const char *relief_severity_name(unsigned s)
 {
     static const char *const names[SEV_COUNT] = { "CRITICAL", "URGENT", "ROUTINE" };
     return s < SEV_COUNT ? names[s] : "?";
+}
+
+static inline const char *relief_banker_name(unsigned b)
+{
+    static const char *const names[RELIEF_BANKER_RES] = { "TRUCK", "BOAT", "MED_KIT", "FOOD_KIT" };
+    return b < RELIEF_BANKER_RES ? names[b] : "?";
+}
+
+/* Banker's column of a request resource, or -1 if the resource is not Banker-managed. */
+static inline int relief_banker_index(unsigned resource)
+{
+    switch (resource) {
+    case RES_TRUCK:    return BK_TRUCK;
+    case RES_BOAT:     return BK_BOAT;
+    case RES_MED_KIT:  return BK_MED_KIT;
+    case RES_FOOD_KIT: return BK_FOOD_KIT;
+    default:           return -1;
+    }
+}
+
+/* Banker's units for a request of `quantity` (vehicles 1:1, kits rounded up to whole crates). */
+static inline unsigned relief_banker_units(unsigned resource, unsigned quantity)
+{
+    if (resource == RES_MED_KIT || resource == RES_FOOD_KIT)
+        return (quantity + RELIEF_KITS_PER_CRATE - 1) / RELIEF_KITS_PER_CRATE;
+    return quantity;
 }
 
 static inline const char *relief_resource_name(unsigned r)
@@ -124,7 +174,7 @@ static inline int relief_resource_parse(const char *s)
  */
 #define RELIEF_SHM_NAME      "/reliefos_status"
 #define RELIEF_SHM_MAGIC     0x534c4552u     /* "RELS" */
-#define RELIEF_SHM_VERSION   3
+#define RELIEF_SHM_VERSION   4
 #define RELIEF_SHM_CAMPS     64
 #define RELIEF_CAMP_NAME_MAX 32
 #define RELIEF_SHM_TEAMS     16     /* max rescue team threads (reliefd --teams) */
@@ -193,6 +243,20 @@ typedef struct {
     /* Inventory (Phase 3, readers-writers): stock per warehouse and kit type */
     char     inv_lock[16];                  /* readers-writers implementation: semaphore|rwlock */
     int64_t  inventory[RELIEF_WAREHOUSES][RELIEF_KIT_KINDS];
+    /* Deadlock handling (Phase 3): the Banker's state, one row per process (camp) slot */
+    char     dl_mode[16];                   /* --deadlock: avoid | none | prevent | detect */
+    uint32_t bk_nproc;                      /* rows used in bk_proc */
+    int32_t  bk_total[RELIEF_BANKER_RES];
+    int32_t  bk_available[RELIEF_BANKER_RES];
+    struct {
+        uint32_t camp;                      /* camp id, shown as P<camp> */
+        uint32_t active;                    /* 1 between HELLO and BYE/exit */
+        int32_t  max[RELIEF_BANKER_RES];
+        int32_t  alloc[RELIEF_BANKER_RES];
+        uint32_t pending;                   /* requests of this camp waiting in reliefd */
+    } bk_proc[RELIEF_SHM_CAMPS];
+    uint64_t bk_grants, bk_denied_unsafe, bk_waits_unavailable, bk_releases, bk_rejects;
+    uint32_t bk_pending;                    /* requests waiting (unsafe or unavailable) */
 } relief_status_t;
 
 typedef struct {
@@ -210,6 +274,9 @@ static inline const char *relief_msg_kind_name(unsigned k)
     case MSG_REQUEST:  return "REQUEST";
     case MSG_BYE:      return "BYE";
     case MSG_SHUTDOWN: return "SHUTDOWN";
+    case MSG_RELEASE:  return "RELEASE";
+    case MSG_GRANT:    return "GRANT";
+    case MSG_REJECT:   return "REJECT";
     default:           return "?";
     }
 }

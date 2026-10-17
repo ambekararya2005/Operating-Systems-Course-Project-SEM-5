@@ -118,7 +118,7 @@ static void camp_spawn(camp_table_t *t, camp_t *c)
     snprintf(id_arg, sizeof id_arg, "%u", c->id);
     snprintf(seed_arg, sizeof seed_arg, "%lu", t->seed);
     snprintf(scale_arg, sizeof scale_arg, "%lu", t->time_scale_ms);
-    char *argv[12];
+    char *argv[16];         /* 13 used at most; keep spare room */
     int argc = 0;
 
     argv[argc++] = t->camp_bin;
@@ -132,6 +132,10 @@ static void camp_spawn(camp_table_t *t, camp_t *c)
     argv[argc++] = scale_arg;
     if (t->exit_when_done)
         argv[argc++] = "--exit-when-done";
+    if (t->resources[0]) {
+        argv[argc++] = "--resources";
+        argv[argc++] = t->resources;
+    }
     argv[argc] = NULL;
 
     pid = fork();
@@ -201,6 +205,8 @@ static void on_child_exit(camp_table_t *t, pid_t pid, int status)
     }
     c->wait_status = status;
     t->dirty = 1;
+    if (t->on_exit && (WIFEXITED(status) || WIFSIGNALED(status)))
+        t->on_exit(t->exit_ctx, c->id);     /* process termination returns its resources */
 
     if (WIFEXITED(status)) {
         int code = WEXITSTATUS(status);

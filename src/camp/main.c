@@ -9,7 +9,18 @@
  *                    With --exit-when-done, send BYE and exit 0 as soon as the replay ends.
  *   --count N        (manual/testing) send N random requests (deterministic for --seed
  *                    and --id) immediately, then BYE, and exit.
- * Both send HELLO first. --shutdown instead sends a single SHUTDOWN message (admin/test hook).
+ * Both send HELLO first, with the camp's maximum claim of each Banker's resource (TRUCK, BOAT,
+ * MED_KIT and FOOD_KIT crates, see include/relief.h). --shutdown instead sends a single
+ * SHUTDOWN message (admin/test hook).
+ *
+ * Deadlock avoidance (Unit 3, scenario mode): the claim is the camp's peak concurrent demand
+ * (every row held from its arrival for service_time minutes), capped at the totals of
+ * --resources (default scenarios/resources.conf). The camp creates its reply queue
+ * RELIEF_REPLY_MQ_FMT, on which reliefd answers MSG_GRANT or MSG_REJECT. A granted request is
+ * held for service_time simulated minutes, then handed back with MSG_RELEASE (the truck or
+ * boat is back, the crates are returned). The camp never asks for more than its claim: a
+ * request that would take it over waits in the camp until its own releases make room. With
+ * --exit-when-done it says BYE only once everything granted has been released.
  * Sends never hang on a full queue: mq_timedsend retries with a "queue full, retrying" warning.
  *
  * Signals (sent by `reliefctl alert|dump` or by reliefd):
@@ -23,6 +34,7 @@
  */
 #include "log.h"
 #include "relief.h"
+#include "resconf.h"
 #include "rng.h"
 #include "shm.h"
 
@@ -84,16 +96,25 @@ typedef struct {
     int             shm_row;            /* cached index of our row, -1 = not found yet */
     timer_t         heartbeat_timer;
     int             have_timer;
+    /* Banker's resources */
+    mqd_t           reply;              /* reliefd -> camp: MSG_GRANT / MSG_REJECT */
+    int             have_reply;
+    char            reply_name[64];
+    int             total[RELIEF_BANKER_RES];
+    int             claim[RELIEF_BANKER_RES];
+    unsigned long   granted, released, rejected, deferred;
 } camp_ctx_t;
 
 static void usage(const char *prog)
 {
     fprintf(stderr,
             "usage: %s --id N --scenario FILE [--time-scale MS] [--seed S] [--exit-when-done]\n"
+            "          [--resources FILE]\n"
             "          (resident until SIGTERM, or until the replay ends with --exit-when-done)\n"
             "       %s --id N [--count N] [--seed S]   (send N random requests and exit)\n"
             "       %s --shutdown\n"
             "  --time-scale MS  real milliseconds per simulated minute (default %d, 0 = no pacing)\n"
+            "  --resources FILE Banker's totals that cap the declared claim (default: built-in 3/2/40/60)\n"
             "signals: SIGUSR1 = evacuation alert, SIGUSR2 = status dump, SIGTERM = graceful exit\n",
             prog, prog, prog, DEFAULT_TIME_SCALE);
 }
@@ -349,6 +370,11 @@ static long send_random(camp_ctx_t *c, unsigned long count, unsigned long seed)
         r.quantity = (uint16_t)rng_range(&rng, 1, 50);
         r.service_time = rng_range(&rng, 1, 30);
         r.arrival = arrival;
+        int bi = relief_banker_index(r.resource);
+        if (bi >= 0) {
+            unsigned u = relief_banker_units(r.resource, r.quantity);
+            r.units = (uint16_t)(u > (unsigned)c->claim[bi] ? (unsigned)c->claim[bi] : u);
+        }
         if (send_request(c, &r) == -1)
             return g_stop ? (long)c->sent : -1;
     }
@@ -427,79 +453,254 @@ static long load_scenario(const char *path, uint32_t id, scenario_row_t **rows_o
     return (long)n;
 }
 
-/* Sleep until origin + offset_ms on CLOCK_MONOTONIC, servicing alerts/dumps that wake
- * us early. Returns -1 if a stop signal arrived. */
-static int sleep_until(camp_ctx_t *c, const struct timespec *origin, uint64_t offset_ms)
+static int64_t mono_ns(void)
 {
-    struct timespec t = *origin;
-    int err;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
 
-    t.tv_sec += (time_t)(offset_ms / 1000);
-    t.tv_nsec += (long)(offset_ms % 1000) * 1000000L;
-    if (t.tv_nsec >= 1000000000L) {
-        t.tv_sec++;
-        t.tv_nsec -= 1000000000L;
+/* Banker's units of each row (vehicles capped at the fleet size), then the claim: for every
+ * resource, the most units this camp would hold at once if each row were granted on arrival
+ * and held for its service time, capped at the total. */
+static void compute_claim(camp_ctx_t *c, scenario_row_t *rows, long n)
+{
+    for (int j = 0; j < RELIEF_BANKER_RES; j++)
+        c->claim[j] = 0;
+    for (long k = 0; k < n; k++) {
+        relief_request_t *r = &rows[k].req;
+        int bi = relief_banker_index(r->resource);
+        if (bi < 0)
+            continue;
+        unsigned u = relief_banker_units(r->resource, r->quantity);
+        r->units = (uint16_t)(u > (unsigned)c->total[bi] ? (unsigned)c->total[bi] : u);
     }
-    /* Absolute deadline: no drift across rows, and an interrupted sleep resumes exactly. */
-    while ((err = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t, NULL)) == EINTR) {
-        if (g_stop)
-            return -1;
-        service_signals(c);
+    for (long k = 0; k < n; k++) {
+        int bi = relief_banker_index(rows[k].req.resource), held = 0;
+        if (bi < 0)
+            continue;
+        uint32_t t = rows[k].req.arrival;
+        for (long i = 0; i < n; i++) {
+            const relief_request_t *r = &rows[i].req;
+            uint32_t hold = r->service_time ? r->service_time : 1;
+            if (relief_banker_index(r->resource) == bi && r->arrival <= t && t < r->arrival + hold)
+                held += r->units;
+        }
+        if (held > c->claim[bi])
+            c->claim[bi] = held;
     }
-    return err == 0 ? 0 : -1;
+    for (int j = 0; j < RELIEF_BANKER_RES; j++)
+        if (c->claim[j] > c->total[j])
+            c->claim[j] = c->total[j];
+}
+
+/* Create this camp's reply queue (a stale one from a crashed run is replaced). */
+static void open_reply_queue(camp_ctx_t *c)
+{
+    struct mq_attr attr;
+
+    snprintf(c->reply_name, sizeof c->reply_name, RELIEF_REPLY_MQ_FMT, c->id);
+    mq_unlink(c->reply_name);
+    memset(&attr, 0, sizeof attr);
+    attr.mq_maxmsg = RELIEF_MQ_MAXMSG;
+    attr.mq_msgsize = sizeof(relief_msg_t);
+    c->reply = mq_open(c->reply_name, O_CREAT | O_EXCL | O_RDONLY, 0600, &attr);
+    c->have_reply = c->reply != (mqd_t)-1;
+    if (!c->have_reply)
+        LOG_WARN("mq_open %s: %s: requests will not be tracked", c->reply_name, strerror(errno));
+}
+
+static void close_reply_queue(camp_ctx_t *c)
+{
+    if (!c->have_reply)
+        return;
+    mq_close(c->reply);
+    mq_unlink(c->reply_name);
+    c->have_reply = 0;
+}
+
+static int send_hello(camp_ctx_t *c)
+{
+    memset(&c->msg.u, 0, sizeof c->msg.u);
+    c->msg.kind = MSG_HELLO;
+    for (int j = 0; j < RELIEF_BANKER_RES; j++)
+        c->msg.u.hello.max_claim[j] = (uint16_t)c->claim[j];
+    c->msg.u.hello.flags = c->have_reply ? HELLO_FLAG_REPLY_QUEUE : 0;
+    LOG_INFO("HELLO max claim TRUCK=%d BOAT=%d MED_KIT=%d FOOD_KIT=%d crates%s", c->claim[0], c->claim[1],
+             c->claim[2], c->claim[3], c->have_reply ? "" : " (no reply queue)");
+    return send_msg(c, 0);
+}
+
+static int send_release(camp_ctx_t *c, const relief_request_t *req)
+{
+    memset(&c->msg.u, 0, sizeof c->msg.u);
+    c->msg.kind = MSG_RELEASE;
+    c->msg.u.req = *req;
+    c->msg.u.req.camp_id = c->id;
+    c->msg.u.req.camp_pid = c->msg.camp_pid;
+    if (send_msg(c, 0) == -1)
+        return -1;
+    c->released++;
+    LOG_INFO("sent RELEASE id=%u resource=%s units=%u", req->id, relief_resource_name(req->resource),
+             req->units);
+    return 0;
+}
+
+enum { IT_WAITING = 0, IT_DEFERRED, IT_PENDING, IT_HELD, IT_DONE };
+
+typedef struct {
+    const relief_request_t *req;
+    int     bi;                 /* Banker's column, -1 for other resources (or no reply queue) */
+    int     state;
+    int64_t release_ns;
+} item_t;
+
+/* Handle one reply from reliefd. */
+static void on_reply(camp_ctx_t *c, const relief_msg_t *m, item_t *it, long n, int *outstanding,
+                     int64_t scale_ns)
+{
+    for (long k = 0; k < n; k++) {
+        if (it[k].req->id != m->u.req.id || it[k].state != IT_PENDING)
+            continue;
+        if (m->kind == MSG_GRANT) {
+            it[k].state = IT_HELD;
+            it[k].release_ns = mono_ns() + (int64_t)it[k].req->service_time * scale_ns;
+            c->granted++;
+            LOG_INFO("GRANT id=%u resource=%s units=%u, holding for %u min", m->u.req.id,
+                     relief_resource_name(m->u.req.resource), m->u.req.units, it[k].req->service_time);
+        } else {
+            it[k].state = IT_DONE;
+            outstanding[it[k].bi] -= it[k].req->units;
+            c->rejected++;
+            LOG_WARN("REJECT id=%u resource=%s units=%u (over the declared claim)", m->u.req.id,
+                     relief_resource_name(m->u.req.resource), m->u.req.units);
+        }
+        return;
+    }
+    LOG_WARN("unexpected %s for request %u", relief_msg_kind_name(m->kind), m->u.req.id);
 }
 
 /*
- * Replay this camp's scenario rows on a simulated clock: row with arrival A minutes is
- * sent at camp start + A * time_scale_ms. Returns number sent, or -1 on error.
+ * Replay this camp's scenario rows on a simulated clock (a row with arrival A minutes is due
+ * at replay start + A * time_scale_ms) and look after the Banker's requests: send a due row unless
+ * it would take the camp over its claim (then it waits here), wait for reliefd's GRANT, hold,
+ * RELEASE. Ends when every row is done (exit_when_done) or on SIGTERM/SIGINT.
+ * Returns the number of requests sent, or -1 on error.
  */
-static long send_scenario(camp_ctx_t *c, const char *path, unsigned long time_scale_ms)
+static long run_scenario(camp_ctx_t *c, scenario_row_t *rows, long n, unsigned long time_scale_ms,
+                         int exit_when_done)
 {
-    scenario_row_t *rows = NULL;
-    long n, rc;
+    item_t *it = calloc((size_t)(n ? n : 1), sizeof *it);
+    int64_t t0 = mono_ns();     /* simulated minute 0: the replay starts now, after HELLO, so
+                                 * startup cost (e.g. under valgrind) does not compress the rows */
+    int64_t scale_ns = (int64_t)time_scale_ms * 1000000;
+    int outstanding[RELIEF_BANKER_RES] = { 0 };
+    long next = 0, rc = 0;
 
-    n = load_scenario(path, c->id, &rows);
-    if (n < 0)
+    if (!it) {
+        LOG_ERROR("out of memory");
         return -1;
+    }
+    for (long k = 0; k < n; k++) {
+        it[k].req = &rows[k].req;
+        it[k].bi = c->have_reply ? relief_banker_index(rows[k].req.resource) : -1;
+    }
     c->rows_total = n;
-    LOG_INFO("camp %u: %ld scenario rows, time scale %lu ms per simulated minute",
-             c->id, n, time_scale_ms);
+    LOG_INFO("camp %u: %ld scenario rows, time scale %lu ms per simulated minute", c->id, n, time_scale_ms);
 
-    rc = 0;
-    for (long i = 0; i < n && !g_stop; i++) {
-        if (time_scale_ms > 0 &&
-            sleep_until(c, &c->started, (uint64_t)rows[i].req.arrival * time_scale_ms) == -1)
-            break;
-        if (send_request(c, &rows[i].req) == -1) {
-            if (!g_stop)
+    while (!g_stop) {
+        int64_t now = mono_ns(), wake = now + 100000000;    /* re-check signals every 100 ms */
+        int busy = next < n;
+
+        service_signals(c);
+        /* Hold times that are over: hand the resources back. */
+        for (long k = 0; k < next && rc == 0 && !g_stop; k++) {
+            if (it[k].state == IT_HELD && it[k].release_ns <= now) {
+                if (send_release(c, it[k].req) == -1)
+                    rc = -1;
+                it[k].state = IT_DONE;
+                outstanding[it[k].bi] -= it[k].req->units;
+            }
+        }
+        /* Rows that are due. */
+        while (rc == 0 && !g_stop && next < n && (scale_ns == 0 || now >= t0 + (int64_t)it[next].req->arrival * scale_ns)) {
+            item_t *x = &it[next++];
+            if (x->bi < 0) {
+                if (send_request(c, x->req) == -1)
+                    rc = -1;
+                x->state = IT_DONE;
+            } else {
+                x->state = IT_DEFERRED;
+            }
+        }
+        /* Banker's requests that fit within the claim, in arrival order. */
+        for (long k = 0; k < next && rc == 0 && !g_stop; k++) {
+            item_t *x = &it[k];
+            if (x->state != IT_DEFERRED)
+                continue;
+            if (outstanding[x->bi] + x->req->units > c->claim[x->bi]) {
+                if (!x->release_ns) {           /* log once */
+                    c->deferred++;
+                    x->release_ns = -1;
+                    LOG_INFO("holding back id=%u resource=%s units=%u: would exceed the claim of %d",
+                             x->req->id, relief_resource_name(x->req->resource), x->req->units,
+                             c->claim[x->bi]);
+                }
+                continue;
+            }
+            if (send_request(c, x->req) == -1)
                 rc = -1;
+            x->state = IT_PENDING;
+            outstanding[x->bi] += x->req->units;
+        }
+        if (rc)
+            break;
+        for (long k = 0; k < next; k++) {
+            if (it[k].state == IT_DEFERRED || it[k].state == IT_PENDING)
+                busy = 1;
+            if (it[k].state == IT_HELD) {
+                busy = 1;
+                if (it[k].release_ns < wake)
+                    wake = it[k].release_ns;
+            }
+        }
+        if (next < n && scale_ns) {
+            int64_t due = t0 + (int64_t)it[next].req->arrival * scale_ns;
+            if (due < wake)
+                wake = due;
+        }
+        if (!busy && exit_when_done)
+            break;
+
+        /* Sleep until the next event, reading reliefd's replies meanwhile. */
+        int64_t left = wake - mono_ns();
+        if (left <= 0)
+            continue;
+        if (!c->have_reply) {
+            struct timespec ts = { (time_t)(left / 1000000000), (long)(left % 1000000000) };
+            nanosleep(&ts, NULL);
+            continue;
+        }
+        struct timespec dl;
+        relief_msg_t m;
+        clock_gettime(CLOCK_REALTIME, &dl);
+        dl.tv_sec += (time_t)(left / 1000000000);
+        dl.tv_nsec += (long)(left % 1000000000);
+        if (dl.tv_nsec >= 1000000000L) {
+            dl.tv_sec++;
+            dl.tv_nsec -= 1000000000L;
+        }
+        ssize_t got = mq_timedreceive(c->reply, (char *)&m, sizeof m, NULL, &dl);
+        if (got == (ssize_t)sizeof m && (m.kind == MSG_GRANT || m.kind == MSG_REJECT))
+            on_reply(c, &m, it, n, outstanding, scale_ns);
+        else if (got == -1 && errno != ETIMEDOUT && errno != EINTR) {
+            LOG_ERROR("mq_timedreceive %s: %s", c->reply_name, strerror(errno));
+            rc = -1;
             break;
         }
     }
-    free(rows);
+    free(it);
     return rc < 0 ? -1 : (long)c->sent;
-}
-
-/* Idle until SIGTERM/SIGINT, still answering SIGUSR1/SIGUSR2/SIGALRM. These signals are
- * blocked between checking the flags and sigsuspend(), so none can slip through the gap. */
-static void wait_for_stop(camp_ctx_t *c)
-{
-    sigset_t block, old;
-
-    sigemptyset(&block);
-    sigaddset(&block, SIGTERM);
-    sigaddset(&block, SIGINT);
-    sigaddset(&block, SIGUSR1);
-    sigaddset(&block, SIGUSR2);
-    sigaddset(&block, SIGALRM);
-    sigprocmask(SIG_BLOCK, &block, &old);
-    for (;;) {
-        service_signals(c);
-        if (g_stop)
-            break;
-        sigsuspend(&old);   /* atomically unblock and wait for a signal */
-    }
-    sigprocmask(SIG_SETMASK, &old, NULL);
 }
 
 int main(int argc, char **argv)
@@ -512,19 +713,21 @@ int main(int argc, char **argv)
         { "time-scale", required_argument, NULL, 't' },
         { "exit-when-done", no_argument,   NULL, 'x' },
         { "shutdown",   no_argument,       NULL, 'S' },
+        { "resources",  required_argument, NULL, 'r' },
         { "help",       no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
     static camp_ctx_t camp;
     unsigned long id = 0, count = 5, seed = 1, time_scale = DEFAULT_TIME_SCALE;
     int have_id = 0, have_count = 0, shutdown_only = 0, exit_when_done = 0, opt;
-    const char *scenario = NULL;
-    long sent;
+    const char *scenario = NULL, *resources = NULL;
+    scenario_row_t *rows = NULL;
+    long sent, nrows = 0;
     int rc = EXIT_SUCCESS;
 
     log_init("camp");
 
-    while ((opt = getopt_long(argc, argv, "i:c:s:f:t:xSh", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "i:c:s:f:t:xSr:h", opts, NULL)) != -1) {
         switch (opt) {
         case 'i':
             if (parse_ulong(optarg, UINT32_MAX / RELIEF_REQ_ID_BASE - 1, &id) == -1 || id == 0) {
@@ -561,6 +764,9 @@ int main(int argc, char **argv)
         case 'S':
             shutdown_only = 1;
             break;
+        case 'r':
+            resources = optarg;
+            break;
         case 'h':
             usage(argv[0]);
             return 0;
@@ -575,9 +781,20 @@ int main(int argc, char **argv)
     }
 
     install_signal_handlers();
-    clock_gettime(CLOCK_MONOTONIC, &camp.started);  /* also simulated minute 0 */
+    clock_gettime(CLOCK_MONOTONIC, &camp.started);  /* for uptime */
     camp.id = (uint32_t)id;
     camp.rows_total = -1;
+    camp.reply = (mqd_t)-1;
+    {
+        static const int defaults[RELIEF_BANKER_RES] = RELIEF_BANKER_DEFAULT_TOTALS;
+        char err[512];
+        memcpy(camp.total, defaults, sizeof defaults);
+        if (resources && relief_resources_load(resources, camp.total, err, sizeof err) == -1) {
+            LOG_ERROR("%s", err);
+            return EXIT_FAILURE;
+        }
+        memcpy(camp.claim, camp.total, sizeof camp.claim);  /* random mode: claim everything */
+    }
 
     camp.mq = mq_open(RELIEF_MQ_NAME, O_WRONLY);
     if (camp.mq == (mqd_t)-1) {
@@ -595,35 +812,44 @@ int main(int argc, char **argv)
         return rc;
     }
 
+    if (scenario) {
+        nrows = load_scenario(scenario, camp.id, &rows);
+        if (nrows < 0) {
+            mq_close(camp.mq);
+            return EXIT_FAILURE;
+        }
+        compute_claim(&camp, rows, nrows);
+        open_reply_queue(&camp);
+    }
     status_start(&camp);
-    if (send_simple(&camp, MSG_HELLO, 0) == -1) {
+    if (send_hello(&camp) == -1) {
         status_stop(&camp);
+        close_reply_queue(&camp);
+        free(rows);
         mq_close(camp.mq);
         return g_stop ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
-    if (scenario)
-        sent = send_scenario(&camp, scenario, time_scale);
-    else
+    if (scenario) {
+        if (!exit_when_done)
+            LOG_INFO("camp %u: resident after the replay, until SIGTERM", camp.id);
+        sent = run_scenario(&camp, rows, nrows, time_scale, exit_when_done);
+    } else {
         sent = send_random(&camp, count, seed);
+    }
     if (sent < 0 && !g_stop)
         rc = EXIT_FAILURE;
-
-    if (scenario && rc == EXIT_SUCCESS && !g_stop) {
-        if (exit_when_done) {
-            LOG_INFO("camp %u: replay done (%lu requests), exiting", camp.id, camp.sent);
-        } else {
-            LOG_INFO("camp %u resident: sent %lu scenario requests, waiting for SIGTERM",
-                     camp.id, camp.sent);
-            wait_for_stop(&camp);
-        }
-    }
+    if (scenario && rc == EXIT_SUCCESS && !g_stop)
+        LOG_INFO("camp %u: replay done (%lu requests, %lu granted, %lu released), exiting", camp.id,
+                 camp.sent, camp.granted, camp.released);
 
     if (send_simple(&camp, MSG_BYE, BYE_MAX_TRIES) == -1 && !g_stop)
         rc = EXIT_FAILURE;
     LOG_INFO("done: camp=%u sent=%lu escalated=%lu%s", camp.id, camp.sent, camp.escalated,
              g_stop ? " (stopped by signal)" : "");
     status_stop(&camp);
+    close_reply_queue(&camp);
+    free(rows);
     mq_close(camp.mq);
     return rc;
 }

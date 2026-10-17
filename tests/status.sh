@@ -100,7 +100,12 @@ max_age=$(q 'max(c["heartbeat_age_ms"] for c in s["camps"])')
 pass "live: total_requests ${s1[0]} -> ${s2[0]} in 2.2 s; all 8 heartbeats advanced (max age ${max_age} ms)"
 
 # 3. Exact counters once the scenario has been replayed.
+# Since Phase 3 camps wait for Banker's grants and hold back requests that would exceed their
+# claim (3 trucks and 2 boats for 8 camps), so the replay takes about twice the scenario's
+# 360 simulated minutes: allow 4x the usual wait here.
+saved_timeout=$TIMEOUT; TIMEOUT=$((TIMEOUT * 4))
 wait_for "all 200 requests" total_is 200
+TIMEOUT=$saved_timeout
 sleep 1.2   # one more heartbeat so every camp has published its final count
 sum=$(q 'sum(c["requests_sent"] for c in s["camps"])')
 [[ $sum -eq 200 ]] || fail "sum of requests_sent is $sum, expected 200"

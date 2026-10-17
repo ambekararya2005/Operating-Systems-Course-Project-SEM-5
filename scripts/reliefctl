@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # OS concept: Shell programming — functions, getopts, awk/grep/sed pipelines, exit codes (Unit 1);
+#             the Banker's matrices shown in textbook layout (Unit 3);
 #             process control and the PCB via /proc, signals as IPC to camps (Unit 2);
 #             live status read from POSIX shared memory via reliefstat (Unit 2)
 #
@@ -46,14 +47,16 @@ commands:
   stop                  stop reliefd (SIGTERM); it stops and reaps all camps
   status [--json]       reliefd state plus the live camp table from shared memory (reliefstat)
   sched [--json]        live scheduler: policy, ready queue per level, what each team works on
+  banker [--json]       Banker's algorithm: Allocation, Max, Need and Available per camp, and a
+                        safe sequence of the current state (from shared memory)
   ps                    per-process PCB fields from /proc for reliefd and every camp
   tree                  process tree rooted at reliefd
   alert <camp-id|all>   evacuation alert (SIGUSR1): the camp's next 5 requests become CRITICAL
   dump  <camp-id|all>   status dump (SIGUSR2): print the camp's counters
   report [--since MIN | --last-run]
                         requests per camp, severity and resource, the loading dock (occupancy,
-                        producers blocked on a full dock) and the scheduler's per-severity
-                        waits, from the structured log
+                        producers blocked on a full dock), the Banker's grants and waits, and
+                        the scheduler's per-severity waits, from the structured log
   simulate flood [--camps N] [--seed S] [--rows R] [--time-scale MS] [--policy P] [--teams T]
                         generate a scenario, run it to completion (every camp sends BYE, every
                         RESCUE request is served and every kit delivered), stop reliefd and
@@ -414,6 +417,18 @@ cmd_report() {
             if (cutoff != "" && substr($1, 4, 19) < cutoff) next
             restocks++; next
         }
+        / event=banker_start / { parse(); bmode = f["mode"]; btotal = f["total"]; next }
+        / event=(grant|deny_unsafe|wait_unavailable|release|reject_over_claim) / {
+            if (cutoff != "" && substr($1, 4, 19) < cutoff) next
+            parse()
+            if ($0 ~ / event=grant /) { bg++; bgn[f["resource"]]++; bgw[f["resource"]] += f["waited_min"]
+                                         if (f["waited_min"] + 0 > bgmax[f["resource"]] + 0) bgmax[f["resource"]] = f["waited_min"] }
+            else if ($0 ~ / event=deny_unsafe /) bu++
+            else if ($0 ~ / event=wait_unavailable /) bw++
+            else if ($0 ~ / event=release /) brel++
+            else brej++
+            next
+        }
         / event=complete / {
             if (cutoff != "" && substr($1, 4, 19) < cutoff) next
             parse()
@@ -472,6 +487,20 @@ cmd_report() {
                 if (ndel) printf "  average time from dock to delivery: %.1f min\n", age / ndel
             }
 
+            printf "\nDeadlock avoidance (Banker'"'"'s algorithm; vehicles and kit crates; times in simulated minutes)\n"
+            if (bg + bu + bw + brel + brej == 0) print "  no Banker'"'"'s activity in this window"
+            else {
+                printf "  mode %s, totals TRUCK,BOAT,MED_KIT,FOOD_KIT = %s\n", bmode == "" ? "?" : bmode,
+                       btotal == "" ? "?" : btotal
+                printf "  granted %d, released %d, rejected %d; waits: %d unsafe, %d not available\n",
+                       bg, brel, brej + 0, bu + 0, bw + 0
+                printf "  %-10s %7s %13s %10s\n", "RESOURCE", "GRANTS", "AVG WAIT", "MAX WAIT"
+                split("TRUCK BOAT MED_KIT FOOD_KIT", border, " ")
+                for (i = 1; i <= 4; i++) { r = border[i]
+                    if (bgn[r]) printf "  %-10s %7d %13.1f %10.1f\n", r, bgn[r], bgw[r] / bgn[r], bgmax[r]
+                    else printf "  %-10s %7d %13s %10s\n", r, 0, "-", "-" }
+            }
+
             printf "\nScheduler (RESCUE requests; times in simulated minutes)\n"
             if (done == 0) { print "  no completed RESCUE requests in this window"; exit 0 }
             printf "  policy %s, %s teams: completed %d, average wait %.1f, average turnaround %.1f\n",
@@ -495,6 +524,28 @@ cmd_report() {
 }
 
 # make_camps_conf <n> <file>: the first n camps of camps.conf, padded with generic names.
+cmd_banker() {
+    local opt json=0 stat="$BIN_DIR/reliefstat"
+    long_to_short "json=j" "$@"
+    set -- "${ARGS[@]+"${ARGS[@]}"}"
+    local OPTIND=1
+    while getopts ":j" opt; do
+        case "$opt" in
+            j) json=1 ;;
+            *) usage_err "banker: unknown option -$OPTARG" ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+    (( $# == 0 )) || usage_err "banker: unexpected argument '$1'"
+    require_daemon >/dev/null
+    [[ -x "$stat" ]] || die "reliefstat not built; run 'make' first"
+    if (( json )); then
+        "${WRAP[@]}" "$stat" --banker --json
+    else
+        "${WRAP[@]}" "$stat" --banker
+    fi
+}
+
 make_camps_conf() {
     local n=$1 out=$2
     awk -v n="$n" '
@@ -594,6 +645,7 @@ main() {
         stop)           cmd_stop "$@" ;;
         status)         cmd_status "$@" ;;
         sched)          cmd_sched "$@" ;;
+        banker)         cmd_banker "$@" ;;
         ps)             cmd_ps "$@" ;;
         tree)           cmd_tree "$@" ;;
         alert)          cmd_alert "$@" ;;

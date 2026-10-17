@@ -389,6 +389,66 @@ main thread (mq loop)             P producer threads                  C truck th
 - **Lock order:** the inventory lock and the dock `mutex` are never held together with the shm
   lock. Each publisher copies under its own lock, releases it, then writes the shm.
 
+## Phase 3: deadlock avoidance (`src/deadlock/`, `src/reliefd/resmgr.c`)
+### Resources and units
+The Banker's algorithm manages four resource types, in this column order everywhere:
+
+| Resource | Total (`scenarios/resources.conf`) | Unit |
+|----------|-----------------------------------:|------|
+| TRUCK | 3 | one vehicle |
+| BOAT | 2 | one vehicle |
+| MED_KIT | 40 | a crate of 10 kits |
+| FOOD_KIT | 60 | a crate of 10 kits |
+
+- **Units of a request:** `relief_banker_units()`: vehicles 1:1, kits rounded up to whole crates.
+- **Oversized vehicle requests:** a request for more vehicles than the fleet (the scenario has up
+  to 4 trucks and 3 boats) is capped at the fleet size by the camp.
+- **Other requests:** RESCUE goes to the scheduler and HYGIENE_KIT to the loading dock, as before.
+
+### Protocol (`include/relief.h`)
+```
+camp                                        reliefd
+ HELLO   max_claim[4], flags ─────────────►  claim: Max row of the camp (banker_set_max)
+ REQUEST units ──────────────────────────►  resmgr queue ─► allocator thread: banker_request
+         ◄──────────── MSG_GRANT / MSG_REJECT on /reliefos_camp_<id>   (kits ─► loading dock)
+ ... hold service_time simulated minutes ...
+ RELEASE units ──────────────────────────►  banker_release, retry waiting requests
+ BYE (or the process dies) ──────────────►  banker_remove: everything it held comes back
+```
+- **Max claim:** each camp computes it from its own scenario rows: the most units it would hold
+  at once if every row were granted on arrival and held for its service time, capped at the total.
+  The camp never exceeds the claim. A request that would take it over waits *in the camp* until
+  the camp's own releases make room, so `request > need` (a rejection) cannot happen in normal
+  operation.
+- **Reply queue:** each camp creates its own reply queue (`RELIEF_REPLY_MQ_FMT`) before HELLO,
+  replacing any stale one, and removes it at exit. reliefd removes the queue of a camp that died.
+- **Random mode:** camps started with `--count N` claim the totals, have no reply queue, and send
+  BYE at once, so their grants are returned by the BYE.
+
+### Allocator (`resmgr.c`)
+- **Threads:** the main thread only queues requests, releases and claims. One allocator thread
+  owns the decisions: it sleeps on a condition variable while nothing has changed, then retries
+  every waiting request in arrival order through the `--deadlock` policy (`src/deadlock/deadlock.c`,
+  a function-pointer table; only `avoid` = `banker_request` is implemented).
+- **Logging:** each grant logs the safe sequence found. A refusal logs `deny_unsafe` or
+  `wait_unavailable`, each at most once per request.
+- **Undeliverable grants:** if a GRANT cannot be delivered (the reply queue stays full), the
+  allocation is undone and the request keeps waiting, so a camp can never hold resources it does
+  not know about.
+- **Process termination:** BYE and the death of a camp process (`camps.c` calls `on_exit` from
+  `waitpid`, before any restart) call `banker_remove`, the textbook "process terminates and
+  returns all its resources".
+
+### Safety algorithm (`banker.c`)
+- **Algorithm:** the textbook Work/Finish algorithm.
+- **Search order:** "find an i" is done as repeated passes over P0..Pn-1 that carry on after a
+  find instead of restarting at P0. This is the usual hand-worked order, and it reproduces the
+  textbook's `<P1, P3, P4, P0, P2>` (`tests/test_banker.c`).
+- **Reuse:** `banker.c` is pure (no threads, no IPC). `reliefstat --banker` / `reliefctl banker`
+  rebuild the state from shared memory (`bk_*` fields, shm version 4) and run the same safety
+  algorithm to print a safe sequence of the current state, under the Allocation, Max, Need and
+  Available matrices.
+
 ## Structured log (`$RELIEF_HOME/logs/reliefd.log`)
 One event per line: `ts=<iso8601> level=<lvl> comp=reliefd pid=<pid> event=<name> key=value ...`.
 Values contain no spaces, except `msg="..."` on free-form `event=log` lines. Events include

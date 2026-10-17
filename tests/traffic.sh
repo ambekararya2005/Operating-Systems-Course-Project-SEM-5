@@ -4,7 +4,7 @@
 # Tests realistic camp traffic:
 #   1. experiments/gen_scenario.py reproduces scenarios/flood_pune.csv (15/35/50 mix, 8 camps)
 #   2. reliefd + 8 camps replay the 200-row scenario on a simulated clock: exactly 200 requests
-#      (the CSV's ids, each camp in arrival order, spread over time), 8 HELLO, 8 BYE
+#      (the CSV's ids, each camp in arrival order except Banker's requests held back within its claim, spread over time), 8 HELLO, 8 BYE
 #   3. queue full: with reliefd frozen (SIGSTOP), camps log "queue full, retrying" instead of
 #      hanging, and every message is still delivered once reliefd continues
 #   BIN_DIR       directory holding reliefd and camp (default: build)
@@ -106,12 +106,14 @@ diff <(awk -F, 'NR > 1 { print $2 * 1000000 + NR }' "$SCENARIO" | sort -n) \
     || fail "request ids differ from the scenario rows"
 pass "request ids match the scenario rows exactly (no loss, no duplicates)"
 
-awk '/ event=request / {
+# Banker's requests (banker=1) may be held back by their camp until its own releases keep it
+# within its declared claim (Phase 3), so only the other requests must keep arrival order.
+awk '/ event=request .* banker=0 / {
         for (i = 1; i <= NF; i++) { split($i, kv, "="); f[kv[1]] = kv[2] }
         if (f["arrival"] + 0 < last[f["camp"]] + 0) { bad = 1 }
         last[f["camp"]] = f["arrival"]
      } END { exit bad }' "$LOG" || fail "a camp sent requests out of arrival order"
-pass "every camp sent its requests in arrival order"
+pass "every camp sent its non-Banker requests in arrival order"
 
 # Real time between the first and last request must reflect the simulated clock.
 span_ms=$(awk '/ event=request / {

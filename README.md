@@ -42,7 +42,8 @@ make test            # tests/sched.sh (textbook FCFS/SJF/SRTF/RR/prio/MLFQ unit 
                      # tests/cli.sh (reliefctl ps/tree/report/simulate, stockcheck.sh),
                      # tests/dispatch.sh (live rescue-team threads: dispatch, preemption, aging),
                      # tests/racelab.sh (critical section: Peterson, mutex, spinlock, semaphore),
-                     # tests/sync.sh (bounded buffer, readers-writers, rwlab), tests/dock.sh (loading dock)
+                     # tests/sync.sh (bounded buffer, readers-writers, rwlab), tests/dock.sh (loading dock),
+                     # tests/banker.sh (Banker's algorithm: textbook example, live grants/releases)
 make tsan            # ThreadSanitizer build (build/tsan/) + tests
 make valgrind        # tests under valgrind (camps too)
 make e1              # experiment E1: 9 variants x 5 seeds + E1b load sweep -> experiments/results/e1*.csv + graphs
@@ -141,6 +142,18 @@ build/rwlab --rw rwlock         # writer preference: ~900 writes, max writer wai
 ```
 `RELIEF_DOCK_ARGS="--dock 4 --rw semaphore" scripts/reliefctl start` passes dock options through reliefctl.
 
+### Deadlock avoidance: the Banker's algorithm
+TRUCK (3), BOAT (2), MED_KIT (40 crates) and FOOD_KIT (60 crates) requests are decided by the Banker's
+algorithm (`reliefd --deadlock avoid`, the default; totals in `scenarios/resources.conf`). Each camp declares
+its maximum claim in HELLO, waits for reliefd's GRANT on its own reply queue, holds the resource for the
+request's service time and hands it back with RELEASE. A request that would leave the system in an unsafe
+state waits until something is released.
+```sh
+scripts/reliefctl banker        # Allocation, Max, Need, Available per camp + a safe sequence
+scripts/reliefctl report        # grants, unsafe/unavailable waits, average wait per resource
+build/test_banker               # textbook example: safe sequence <P1, P3, P4, P0, P2>
+```
+
 ### Scenarios
 `scenarios/flood_pune.csv` holds 200 requests across the 8 camps: 15% CRITICAL, 35% URGENT and 50% ROUTINE,
 with arrivals over 6 simulated hours and a peak in the middle. It is generated, and the same seed gives a
@@ -161,6 +174,7 @@ and `logs/reliefd.out` (raw stderr). You never need root.
 | `stop`     | Stops reliefd with SIGTERM. reliefd stops and reaps every camp |
 | `status [--json]` | Shows whether reliefd is running, then the live camp table from shared memory (`reliefstat`): pid, state, requests sent, heartbeat, restarts |
 | `sched [--json]` | Live scheduler: policy, ready queue per level, and what each rescue team is working on |
+| `banker [--json]` | Banker's algorithm in textbook layout: Allocation, Max, Need and Available per camp, and a safe sequence of the current state |
 | `alert <id\|all>` | Evacuation alert (SIGUSR1). The camp's next 5 requests are sent as CRITICAL |
 | `dump <id\|all>`  | Status dump (SIGUSR2). Prints each camp's counters: sent, by severity, escalations, uptime |
 | `ps`       | PID, PPID, state (R/S/D/T/Z), threads, VmRSS, voluntary/nonvoluntary context switches and CPU time, read from `/proc/<pid>/status` and `/proc/<pid>/stat` (the kernel's task_struct) |
@@ -192,8 +206,9 @@ run it every 10 minutes, add this with `crontab -e`:
 | 2, 3 | Threads (pthreads), mutex + condition variable | reliefd's rescue-team threads and clock thread share one ready queue (`src/reliefd/dispatch.c`) | 2 |
 | 3 | Critical section, Peterson's solution, mutex, TAS spinlock, semaphores, futex | `build/racelab`: two camps / one boat / one counter, experiment E4, strace of futex | 3 |
 | 3 | Producer-consumer (bounded buffer, empty/full/mutex semaphores) | reliefd loading dock: warehouse producer threads → dock → truck threads (`src/reliefd/dock.c`) | 3 |
+| 3 | Deadlock avoidance: Banker's algorithm (safety + resource-request) | Trucks, boats and kit crates granted only in safe states; `reliefctl banker` (`src/deadlock/`, `src/reliefd/resmgr.c`) | 3 |
 | 3 | Readers-writers (readers preference vs writer preference) | Inventory behind `rwsync` (semaphore or pthread rwlock); `build/rwlab`, experiment E5 | 3 |
-| 3 | Banker's, wait-for-graph detection + recovery, resource ordering | Deadlock control over trucks/boats | 3 |
+| 3 | Wait-for-graph detection + recovery, resource ordering | `--deadlock detect` / `--deadlock prevent` (Phase 3 step 4) | 3 |
 | 4 | First/best/worst fit, buddy system, slab allocator | Warehouse space, pre-packed relief kits | 4 |
 | 4 | FIFO/LRU/Optimal replacement, thrashing | Perishable stock (plus expiry-first) | 4 |
 | 5 | FCFS/SSTF/SCAN/C-SCAN/LIFO disk scheduling | Delivery routing along one highway | 5 |

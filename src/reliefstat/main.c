@@ -8,6 +8,9 @@
  *   reliefstat --sched  only the scheduler: policy, ready queue per level, each team's work
  *   reliefstat --json   one JSON object (for scripts and later UIs); with --sched, only the
  *                       scheduler object
+ *   reliefstat --banker the Banker's state in textbook layout: Allocation, Max, Need and
+ *                       Available per camp (P<id>), plus a safe sequence of the current state
+ *                       (the safety algorithm run on the snapshot); with --json, as JSON
  *
  * The segment is mapped PROT_READ: reliefstat can never corrupt it, and it does not take
  * the writers' mutex (locking would write to the mutex). relief_shm_snapshot() copies
@@ -15,6 +18,7 @@
  *
  * Exit status: 0 = reliefd running, 1 = not running or stale segment, 2 = usage error.
  */
+#include "../deadlock/banker.h"     /* src/deadlock is not on the include path */
 #include "relief.h"
 #include "shm.h"
 
@@ -124,6 +128,102 @@ static void print_dock_table(const relief_status_t *st)
                (long long)st->inventory[w][1], (long long)st->inventory[w][2]);
 }
 
+/* Rebuild the Banker's state from the snapshot (active rows only) and run the safety
+ * algorithm. Returns the number of active rows; rows[] maps banker process -> bk_proc index. */
+static int banker_from_snapshot(const relief_status_t *st, banker_t *b, int rows[], int seq[], int *len,
+                                int *safe)
+{
+    int n = 0;
+    for (uint32_t i = 0; i < st->bk_nproc && i < RELIEF_SHM_CAMPS; i++)
+        if (st->bk_proc[i].active)
+            rows[n++] = (int)i;
+    banker_init(b, n, RELIEF_BANKER_RES, st->bk_total);
+    for (int p = 0; p < n; p++) {
+        banker_set_max(b, p, st->bk_proc[rows[p]].max);
+        banker_set_alloc(b, p, st->bk_proc[rows[p]].alloc);
+    }
+    *safe = banker_is_safe(b, seq, len);
+    return n;
+}
+
+static void print_banker_table(const relief_status_t *st)
+{
+    banker_t b;
+    int rows[RELIEF_SHM_CAMPS], seq[RELIEF_SHM_CAMPS], len = 0, safe, n;
+    static const char *const hdr = " TRUCK BOAT  MED FOOD";
+
+    n = banker_from_snapshot(st, &b, rows, seq, &len, &safe);
+    printf("Banker's algorithm (--deadlock %s): resources TRUCK, BOAT, MED_KIT, FOOD_KIT "
+           "(kits in crates of %d)\n", st->dl_mode[0] ? st->dl_mode : "-", RELIEF_KITS_PER_CRATE);
+    printf("  grants %llu, denied as unsafe %llu, waited for availability %llu, releases %llu, "
+           "rejected %llu; waiting now %u\n\n",
+           (unsigned long long)st->bk_grants, (unsigned long long)st->bk_denied_unsafe,
+           (unsigned long long)st->bk_waits_unavailable, (unsigned long long)st->bk_releases,
+           (unsigned long long)st->bk_rejects, st->bk_pending);
+    printf("  %-6s %-21s   %-21s   %-21s   %-21s %s\n", "", "Allocation", "Max", "Need", "Available",
+           "WAITING");
+    printf("  %-6s %s   %s   %s   %s\n", "", hdr, hdr, hdr, hdr);
+    for (int p = 0; p < n; p++) {
+        char name[16];
+        snprintf(name, sizeof name, "P%u", st->bk_proc[rows[p]].camp);
+        printf("  %-6s", name);
+        for (int part = 0; part < 3; part++) {
+            for (int j = 0; j < RELIEF_BANKER_RES; j++) {
+                int v = part == 0 ? b.alloc[p][j] : part == 1 ? b.max[p][j] : banker_need(&b, p, j);
+                printf(j ? " %4d" : " %5d", v);
+            }
+            printf("  ");
+        }
+        if (p == 0)
+            printf(" %5d %4d %4d %4d", b.available[0], b.available[1], b.available[2], b.available[3]);
+        else
+            printf(" %21s", "");
+        printf(" %7u\n", st->bk_proc[rows[p]].pending);
+    }
+    if (n == 0)
+        printf("  (no active camps)\n");
+    printf("  %-6s %21s   %21s   %21s   %5d %4d %4d %4d\n", "Total", "", "", "", st->bk_total[0],
+           st->bk_total[1], st->bk_total[2], st->bk_total[3]);
+    printf("\nSafe sequence: ");
+    if (safe) {
+        printf("<");
+        for (int i = 0; i < len; i++)
+            printf("%sP%u", i ? ", " : "", st->bk_proc[rows[seq[i]]].camp);
+        printf(">  (the current state is SAFE)\n");
+    } else {
+        printf("none: the current state is UNSAFE\n");
+    }
+}
+
+static void print_banker_json(const relief_status_t *st)
+{
+    banker_t b;
+    int rows[RELIEF_SHM_CAMPS], seq[RELIEF_SHM_CAMPS], len = 0, safe, n;
+
+    n = banker_from_snapshot(st, &b, rows, seq, &len, &safe);
+    printf("{\"mode\":");
+    print_json_string(st->dl_mode);
+    printf(",\"resources\":[\"TRUCK\",\"BOAT\",\"MED_KIT\",\"FOOD_KIT\"],\"total\":[%d,%d,%d,%d],"
+           "\"available\":[%d,%d,%d,%d],\"grants\":%llu,\"denied_unsafe\":%llu,\"waits_unavailable\":%llu,"
+           "\"releases\":%llu,\"rejects\":%llu,\"waiting\":%u,\"safe\":%s,\"safe_sequence\":[",
+           st->bk_total[0], st->bk_total[1], st->bk_total[2], st->bk_total[3], st->bk_available[0],
+           st->bk_available[1], st->bk_available[2], st->bk_available[3],
+           (unsigned long long)st->bk_grants, (unsigned long long)st->bk_denied_unsafe,
+           (unsigned long long)st->bk_waits_unavailable, (unsigned long long)st->bk_releases,
+           (unsigned long long)st->bk_rejects, st->bk_pending, safe ? "true" : "false");
+    for (int i = 0; safe && i < len; i++)
+        printf("%s%u", i ? "," : "", st->bk_proc[rows[seq[i]]].camp);
+    printf("],\"processes\":[");
+    for (int p = 0; p < n; p++) {
+        printf("%s{\"camp\":%u,\"allocation\":[%d,%d,%d,%d],\"max\":[%d,%d,%d,%d],\"need\":[%d,%d,%d,%d],"
+               "\"waiting\":%u}", p ? "," : "", st->bk_proc[rows[p]].camp, b.alloc[p][0], b.alloc[p][1],
+               b.alloc[p][2], b.alloc[p][3], b.max[p][0], b.max[p][1], b.max[p][2], b.max[p][3],
+               banker_need(&b, p, 0), banker_need(&b, p, 1), banker_need(&b, p, 2), banker_need(&b, p, 3),
+               st->bk_proc[rows[p]].pending);
+    }
+    printf("]}");
+}
+
 static void print_json(const relief_status_t *st, int running, int64_t now)
 {
     printf("{\"running\":%s,\"daemon_pid\":%d,\"start_time_ms\":%lld,\"uptime_ms\":%lld,"
@@ -145,6 +245,8 @@ static void print_json(const relief_status_t *st, int running, int64_t now)
     print_sched_json(st, now);
     printf(",\"dock\":");
     print_dock_json(st);
+    printf(",\"banker\":");
+    print_banker_json(st);
     printf("}\n");
 }
 
@@ -209,9 +311,10 @@ static void print_table(const relief_status_t *st, int running, int64_t now)
 
 static void usage(const char *prog)
 {
-    fprintf(stderr, "usage: %s [--sched] [--json]\n"
+    fprintf(stderr, "usage: %s [--sched | --banker] [--json]\n"
                     "Print reliefd's live status table (POSIX shared memory %s).\n"
-                    "  --sched  only the live scheduler: policy, ready queue, teams\n",
+                    "  --sched  only the live scheduler: policy, ready queue, teams\n"
+                    "  --banker only the Banker's state: Allocation, Max, Need, Available, safe sequence\n",
             prog, RELIEF_SHM_NAME);
 }
 
@@ -220,23 +323,25 @@ int main(int argc, char **argv)
     static const struct option opts[] = {
         { "json", no_argument, NULL, 'j' },
         { "sched", no_argument, NULL, 's' },
+        { "banker", no_argument, NULL, 'b' },
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
     relief_status_t st;
     const relief_shm_t *shm;
-    int json = 0, sched_only = 0, opt, running;
+    int json = 0, sched_only = 0, banker_only = 0, opt, running;
     int64_t now;
 
-    while ((opt = getopt_long(argc, argv, "jsh", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "jsbh", opts, NULL)) != -1) {
         switch (opt) {
         case 'j': json = 1; break;
         case 's': sched_only = 1; break;
+        case 'b': banker_only = 1; break;
         case 'h': usage(argv[0]); return 0;
         default:  usage(argv[0]); return 2;
         }
     }
-    if (optind < argc) {
+    if (optind < argc || (sched_only && banker_only)) {
         usage(argv[0]);
         return 2;
     }
@@ -260,7 +365,12 @@ int main(int argc, char **argv)
 
     now = relief_now_ms();
     running = pid_alive((pid_t)st.daemon_pid);
-    if (sched_only && json) {
+    if (banker_only && json) {
+        print_banker_json(&st);
+        printf("\n");
+    } else if (banker_only) {
+        print_banker_table(&st);
+    } else if (sched_only && json) {
         print_sched_json(&st, now);
         printf("\n");
     } else if (sched_only) {

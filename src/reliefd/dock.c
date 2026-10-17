@@ -461,6 +461,8 @@ void dock_stop(dock_t *d)
      * trucks keep taking), then exit. */
     for (int i = 0; i < d->nstarted_prod; i++)
         pthread_join(d->threads[i], NULL);
+    dockbuf_stats(&d->buf, &s);
+    int max_packages = s.max_count;             /* before the poison pills */
 
     /* One poison pill per truck, through the same bounded buffer. */
     for (int i = 0; i < d->nstarted_trucks; i++) {
@@ -472,6 +474,7 @@ void dock_stop(dock_t *d)
     dockbuf_stats(&d->buf, &s);
     s.puts -= (uint64_t)d->nstarted_trucks;     /* the pills are not packages */
     s.takes -= (uint64_t)d->nstarted_trucks;
+    s.max_count = max_packages;
 
     if (d->threads)
         EV_INFO("dock_stop", "orders=%llu produced=%llu consumed=%llu delivered=%llu undelivered=%llu "
