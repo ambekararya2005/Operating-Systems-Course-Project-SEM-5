@@ -58,6 +58,7 @@ make e2              # experiment E2: real threads under CFS/EEVDF+nice, SCHED_F
 make e3              # experiment E3: deadlock modes compared with build/dlsim (deterministic) -> graphs
 make e4              # experiment E4: every racelab mode x 10 runs -> experiments/results/e4.csv + graphs,
                      #   plus strace futex counts in docs/strace_futex.txt (sudo apt install strace)
+make e5              # experiment E5: first/best/worst fit, buddy, slab on one shipment trace -> graph
 make e4b             # experiment E4b: readers-writers writer starvation, rwlab semaphore vs rwlock
 make clean
 ```
@@ -160,6 +161,16 @@ scripts/reliefctl banker        # Allocation, Max, Need, Available per camp + a 
 scripts/reliefctl report        # grants, unsafe/unavailable waits, average wait per resource
 build/test_banker               # textbook example: safe sequence <P1, P3, P4, P0, P2>
 ```
+
+### Memory: warehouse placement (memsim)
+`build/memsim` models the warehouse floor (1024 units) as memory, with relief shipments arriving and leaving:
+```sh
+build/memsim --alloc first|best|worst|buddy|slab [--seed S --ops N | --trace F] [--show N --width W]
+build/memsim --alloc buddy --ops 60 --show 20      # ASCII floor map every 20 operations ('~' = waste in a block)
+```
+It reports external fragmentation, internal fragmentation, failures and, for slab, objects per slab and
+full/partial/empty slabs. It reads or writes CSV traces (`alloc,<id>,<FOOD|MED|HYGIENE>,<count>` and
+`free,<id>`). Experiment E5 is in `docs/EXPERIMENTS.md`.
 
 ### Live dashboard: reliefui
 `scripts/reliefctl ui` (or `make ui`) opens an htop-like view that refreshes every 500 ms:
@@ -268,7 +279,7 @@ run it every 10 minutes, add this with `crontab -e`:
 | 3 | Deadlock avoidance: Banker's algorithm (safety + resource-request) | Trucks, boats and kit crates granted only in safe states; `reliefctl banker` (`src/deadlock/`, `src/reliefd/resmgr.c`) | 3 |
 | 3 | Readers-writers (readers preference vs writer preference) | Inventory behind `rwsync` (semaphore or pthread rwlock); `build/rwlab`, experiment E4b | 3 |
 | 3 | Deadlock characterization (Coffman conditions), prevention (resource ordering, all-or-nothing), detection (wait-for graph + DFS) and recovery (preemption) | `reliefd --deadlock none/prevent/detect`, `scenarios/deadlock.csv`, `reliefctl waitfor` | 3 |
-| 4 | First/best/worst fit, buddy system, slab allocator | Warehouse space, pre-packed relief kits | 4 |
+| 4 | First/best/worst fit, buddy system, slab allocator; fragmentation | `build/memsim` (`src/mem/`): warehouse floor, pre-packed kits; experiment E5 | 4 |
 | 4 | FIFO/LRU/Optimal replacement, thrashing | Perishable stock (plus expiry-first) | 4 |
 | 5 | FCFS/SSTF/SCAN/C-SCAN/LIFO disk scheduling | Delivery routing along one highway | 5 |
 | 5 | Journaling, directory tree, permissions | Write-ahead journal with fsync + crash recovery, per-role access | 5 |

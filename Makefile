@@ -14,6 +14,7 @@
 #                   + tests/phase3_check.sh (gate M3: critical section, dock, Banker's, zero deadlocks in E3)
 #                   + tests/ui.sh (reliefui --batch: dashboard drawn from the status table)
 #                   + tests/web.sh (web/server.py: status, events, allow-listed actions, figures)
+#                   + tests/mem.sh (test_mem: textbook fits, buddy, slab; memsim determinism, --show)
 #   make tsan       ThreadSanitizer build in build/tsan/ + tests
 #   make valgrind   tests with reliefd and camps under valgrind
 #   make run        run reliefd in the foreground (RELIEF_HOME=./run)
@@ -28,6 +29,8 @@
 #   make e4         experiment E4: critical-section protection, every racelab mode x 10 runs ->
 #                   experiments/results/e4.csv + PNGs (copied to docs/figures/e4/), and the
 #                   strace futex counts in docs/strace_futex.txt
+#   make e5         experiment E5: first/best/worst fit, buddy, slab on the same trace x 5 seeds ->
+#                   experiments/results/e5.csv + PNG (copied to docs/figures/e5/)
 #   make e4b        experiment E4b: readers-writers starvation, rwlab semaphore vs rwlock x 5 runs ->
 #                   experiments/results/e4b.csv + summary table
 
@@ -66,6 +69,12 @@ RACELAB_OBJ := $(RACELAB_SRC:%.c=$(OBJ)/%.o)
 # Live ncurses dashboard (reads the status table read-only; links ncurses).
 RELIEFUI_SRC := src/reliefui/main.c src/common/shm.c src/deadlock/banker.c
 RELIEFUI_OBJ := $(RELIEFUI_SRC:%.c=$(OBJ)/%.o)
+# Memory management (Phase 4): allocators behind one interface + the memsim simulator.
+MEM_SRC := src/mem/mem.c src/mem/fit.c src/mem/buddy.c src/mem/slab.c
+MEMSIM_SRC := src/mem/memsim.c $(MEM_SRC)
+MEMSIM_OBJ := $(MEMSIM_SRC:%.c=$(OBJ)/%.o)
+TEST_MEM_SRC := tests/test_mem.c $(MEM_SRC)
+TEST_MEM_OBJ := $(TEST_MEM_SRC:%.c=$(OBJ)/%.o)
 DLSIM_SRC := src/dlsim/dlsim.c src/common/resconf.c $(DEADLOCK_SRC)
 DLSIM_OBJ := $(DLSIM_SRC:%.c=$(OBJ)/%.o)
 RWLAB_SRC := src/rwlab/main.c src/common/rwsync.c
@@ -84,7 +93,8 @@ SHM_DIE_OBJ := $(SHM_DIE_SRC:%.c=$(OBJ)/%.o)
 TESTS := tests/smoke.sh tests/camps.sh tests/traffic.sh tests/signals.sh tests/status.sh tests/cli.sh \
          tests/phase1_smoke.sh tests/sched.sh tests/dispatch.sh tests/linuxsched.sh tests/phase2_check.sh \
          tests/racelab.sh tests/sync.sh tests/dock.sh tests/banker.sh tests/deadlock.sh \
-         tests/phase3_check.sh tests/ui.sh tests/web.sh
+         tests/phase3_check.sh tests/ui.sh tests/web.sh \
+         tests/mem.sh
 
 # --trace-children: camps exec'd by reliefd also run under valgrind.
 VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
@@ -94,10 +104,10 @@ VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
 # $(call run_tests,ENV...) runs every test script with the given environment.
 run_tests = for t in $(TESTS); do echo "== $$t"; $(1) $$t || exit 1; done
 
-.PHONY: all reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim reliefui ui clean run test tsan valgrind e1 e2 e3 e4 e4b
+.PHONY: all reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim reliefui memsim ui clean run test tsan valgrind e1 e2 e3 e4 e4b e5
 
-all: reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim reliefui $(BUILD)/shm_die_locked $(BUILD)/test_sched \
-     $(BUILD)/test_sync $(BUILD)/test_banker
+all: reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim reliefui memsim $(BUILD)/shm_die_locked $(BUILD)/test_sched \
+     $(BUILD)/test_sync $(BUILD)/test_banker $(BUILD)/test_mem
 
 reliefd: $(BUILD)/reliefd
 camp: $(BUILD)/camp
@@ -107,6 +117,7 @@ linuxsched: $(BUILD)/linuxsched
 racelab: $(BUILD)/racelab
 rwlab: $(BUILD)/rwlab
 dlsim: $(BUILD)/dlsim
+memsim: $(BUILD)/memsim
 reliefui: $(BUILD)/reliefui
 
 $(BUILD)/reliefd: $(RELIEFD_OBJ)
@@ -136,6 +147,12 @@ $(BUILD)/reliefui: $(RELIEFUI_OBJ)
 # The dashboard, in this terminal (start ReliefOS from it with s, or scripts/reliefctl start).
 ui: $(BUILD)/reliefui
 	./$(BUILD)/reliefui
+
+$(BUILD)/memsim: $(MEMSIM_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/test_mem: $(TEST_MEM_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/dlsim: $(DLSIM_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
@@ -204,6 +221,13 @@ e4: racelab
 	@mkdir -p docs/figures/e4
 	cp $(addprefix experiments/results/,$(E4_FIGS)) docs/figures/e4/
 
+# Experiment E5 (deterministic: same seeds -> identical CSV).
+e5: memsim
+	experiments/run_e5.sh
+	python3 -I experiments/plot_e5.py
+	@mkdir -p docs/figures/e5
+	cp experiments/results/e5_fragmentation.png docs/figures/e5/
+
 # Experiment E4b (real threads; a table, no plot).
 e4b: rwlab
 	experiments/run_e4b.sh
@@ -213,4 +237,4 @@ clean:
 
 -include $(RELIEFD_OBJ:.o=.d) $(CAMP_OBJ:.o=.d) $(RELIEFSTAT_OBJ:.o=.d) $(SHM_DIE_OBJ:.o=.d) \
          $(SCHEDSIM_OBJ:.o=.d) $(TEST_SCHED_OBJ:.o=.d) $(LINUXSCHED_OBJ:.o=.d) \
-         $(RACELAB_OBJ:.o=.d) $(RWLAB_OBJ:.o=.d) $(DLSIM_OBJ:.o=.d) $(RELIEFUI_OBJ:.o=.d) $(TEST_SYNC_OBJ:.o=.d) $(TEST_BANKER_OBJ:.o=.d)
+         $(RACELAB_OBJ:.o=.d) $(RWLAB_OBJ:.o=.d) $(DLSIM_OBJ:.o=.d) $(RELIEFUI_OBJ:.o=.d) $(MEMSIM_OBJ:.o=.d) $(TEST_MEM_OBJ:.o=.d) $(TEST_SYNC_OBJ:.o=.d) $(TEST_BANKER_OBJ:.o=.d)

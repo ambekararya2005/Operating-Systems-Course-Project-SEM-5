@@ -11,6 +11,7 @@ Every experiment is deterministic for a given `--seed` and writes CSV to `experi
 | E3 | Deadlock prevention, avoidance, detection and recovery (Unit 3) | What does each way of handling deadlock cost on the same vehicle-heavy workload? | done |
 | E4 | Critical-section problem, Peterson, semaphores; synchronisation in Linux (Unit 3) | Which entry/exit sections keep a shared counter correct, what does each cost, and when does a Linux mutex enter the kernel? | done |
 | E4b | Readers-writers problem (Unit 3) | Does the textbook readers-preference solution starve writers, and does a writer-preference rwlock fix it? | done |
+| E5 | Memory allocation and fragmentation (Unit 4) | How do first/best/worst fit, the buddy system and slab allocation compare on the same shipment trace? | done |
 
 ## E1: triage scheduling comparison
 
@@ -556,6 +557,46 @@ writer? Does glibc's writer-preference rwlock fix that, and what does it cost th
   of 0.12 ms.
 - **reliefd's choice:** it uses `rwlock` by default (`--rw`), because a restock or a delivery must
   not wait behind an endless stream of status reads.
+
+## E5: warehouse placement, memory allocation strategies
+**Question:** On the same stream of relief shipments, how much space does each allocator waste,
+and how often does it fail?
+
+**Setup:** `make e5` (`experiments/run_e5.sh`) runs `build/memsim` (`src/mem/`):
+- **Floor:** 1024 units.
+- **Trace:** 2,000 operations per seed, seeds 1–5, the same for every allocator.
+  - A shipment is 1–12 FOOD (4 units each), 1–16 MED (2) or 1–16 HYGIENE (1) kits.
+  - Arrivals are likelier while the floor is under 90% full, so it runs close to full.
+- **Fragmentation is sampled after every operation:**
+  - *external* = 1 − largest free piece ÷ free space;
+  - *internal* = wasted units ÷ units taken.
+- **First/best/worst fit and buddy** place a shipment contiguously. **Slab** gives each kit an object in
+  its kind's cache: slabs are 16-unit frames, holding 4 FOOD, 8 MED or 16 HYGIENE kits.
+- **Results:** `experiments/results/e5.csv`.
+
+| Allocator | External fragmentation | Internal fragmentation | Failed allocations | Failures with enough free space in total |
+|-----------|------:|------:|------:|------:|
+| first fit | 72.0% | 0% | 6.4% | 100% |
+| best fit | 68.4% | 0% | **5.7%** | 100% |
+| worst fit | 85.9% | 0% | 12.0% | 100% |
+| buddy | 65.7% | 21.8% | 13.3% | 88% |
+| slab | **0%** | 16.3% | **3.8%** | 0% |
+
+Means over 5 seeds; the error bars in the figure show the min–max.
+
+![E5 fragmentation and failures](figures/e5/e5_fragmentation.png)
+
+**Conclusion:**
+- **Variable partitioning wastes nothing inside a partition, but its free space shatters.**
+  Every failure of first, best and worst fit happened with enough free units in total, just not in
+  one piece. Best fit fails least (5.7%); worst fit, which keeps carving up the biggest holes, fails
+  twice as often (12.0%).
+- **The buddy system trades external for internal fragmentation:** 22% of what it hands out is
+  wasted inside power-of-two blocks. It fails most of all (13.3%), because rounding up fills the floor
+  faster.
+- **The slab caches fail least (3.8%), with no external fragmentation:** any free frame fits any kit.
+  The cost is 16% of the slab space sitting in half-empty slabs. For pre-packed, fixed-size kits,
+  slabs are the right warehouse layout.
 
 ## Baseline (Phase 2 step 2)
 `schedsim --teams 3` on `scenarios/flood_pune.csv` (200 requests in 360 min, permanently overloaded). The
