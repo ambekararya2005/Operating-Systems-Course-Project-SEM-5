@@ -44,6 +44,8 @@ make test            # tests/sched.sh (textbook FCFS/SJF/SRTF/RR/prio/MLFQ unit 
 make tsan            # ThreadSanitizer build (build/tsan/) + tests
 make valgrind        # tests under valgrind (camps too)
 make e1              # experiment E1: 8 scheduling variants x 5 seeds -> experiments/results/e1.csv + graphs
+make e2              # experiment E2: real threads under CFS/EEVDF+nice, SCHED_FIFO, SCHED_RR vs simulated
+                     #   (fifo/rr first: sudo setcap cap_sys_nice+ep build/linuxsched)
 make clean
 ```
 
@@ -153,7 +155,8 @@ run it every 10 minutes, add this with `crontab -e`:
 | 2 | IPC (POSIX message queues) | Camps send paced requests over a bounded queue; mq_timedsend back-pressure | 1 |
 | 2, 3 | IPC via POSIX shared memory, process-shared mutex | Live status table `/reliefos_status` read by `reliefstat` (robust mutex + seqlock) | 1 |
 | 2 | Signals as IPC, process control | `reliefctl alert` (SIGUSR1), `dump` (SIGUSR2), graceful SIGTERM; flag-only handlers | 1 |
-| 2 | FCFS, SJF, RR, Priority, MLFQ with aging; SCHED_FIFO/SCHED_RR/nice | Triage scheduler (`src/sched/`, pluggable policies, `schedsim`), experiments E1/E2 | 2 |
+| 2 | FCFS, SJF, RR, Priority, MLFQ with aging | Triage scheduler (`src/sched/`, pluggable policies, `schedsim`), experiment E1 | 2 |
+| 2 | Traditional/modern UNIX scheduling: nice, SCHED_FIFO/SCHED_RR, CFS/EEVDF | `build/linuxsched`: real threads on one pinned CPU, experiment E2 | 2 |
 | 2, 3 | Threads (pthreads), mutex + condition variable | reliefd's rescue-team threads and clock thread share one ready queue (`src/reliefd/dispatch.c`) | 2 |
 | 3 | Producer-consumer, readers-writers, Peterson's | Warehouse → truck, inventory, two camps / one boat | 3 |
 | 3 | Banker's, wait-for-graph detection + recovery, resource ordering | Deadlock control over trucks/boats | 3 |
