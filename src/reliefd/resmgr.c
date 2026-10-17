@@ -211,8 +211,20 @@ static void retry_waiting_locked(resmgr_t *rm)
                     r->camp_id, r->id, item_res(p), p->bundle ? 0 : item_units(p), vec(p->vec, v, sizeof v),
                     r->quantity, (double)(mono_ns() - p->since_ns) / (double)rm->scale_ns, p->retries,
                     vec(rm->bk.available, a, sizeof a), seq_str(rm, seq, len, s, sizeof s));
-            if (rm->on_grant && !p->bundle)
+            if (rm->on_grant && !p->bundle) {
                 rm->on_grant(rm->grant_ctx, r);
+            } else if (rm->on_grant) {
+                /* A bundle's kit crates go to the loading dock as one package per kit type. */
+                for (int j = BK_MED_KIT; j <= BK_FOOD_KIT; j++) {
+                    if (!p->vec[j])
+                        continue;
+                    relief_request_t kit = *r;
+                    kit.resource = j == BK_MED_KIT ? RES_MED_KIT : RES_FOOD_KIT;
+                    kit.units = (uint16_t)p->vec[j];
+                    kit.quantity = (uint16_t)(p->vec[j] * RELIEF_KITS_PER_CRATE);
+                    rm->on_grant(rm->grant_ctx, &kit);
+                }
+            }
             list_unlink(&rm->waiting, prev, p);
             p->since_ns = mono_ns();
             list_append(&rm->granted, p);

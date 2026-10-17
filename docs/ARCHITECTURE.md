@@ -449,6 +449,80 @@ camp                                        reliefd
   algorithm to print a safe sequence of the current state, under the Allocation, Max, Need and
   Available matrices.
 
+## Phase 3: deadlock characterization, prevention, detection and recovery (`--deadlock`)
+### Tasks: where hold-and-wait comes from
+A lone scenario row is a job on its own: the camp holds the resource for the row's service time and
+never waits while holding, so lone rows cannot deadlock. A scenario may add an optional 7th CSV column,
+`task`:
+- **Acquisition:** rows of one camp that share it form a task, and its rows are requested one after
+  another, each once it is due and the previous one is granted.
+- **Holding:** a task keeps everything it got until the last row is granted, then holds it all for
+  the task's longest service time and releases it together. While it waits for its next row it
+  holds the earlier ones, which is hold and wait.
+- **The camp's claim** covers a task's rows for the whole time the task holds them.
+
+`scenarios/deadlock.csv` (run with `--resources scenarios/deadlock_resources.conf`: 2 trucks, 2 boats):
+1. By minute 2, camps 1 and 2 each hold a truck and a boat.
+2. At minute 10, camp 1 asks for a truck and camp 2 for a boat. Each wants what the other holds.
+
+`scenarios/deadlock_mix.csv` (`experiments/gen_deadlock.py`): 6 camps × 3 random tasks of 2–3
+resources, with trucks and boats in both orders.
+
+### The four Coffman conditions per mode
+| `--deadlock` | Mutual exclusion | Hold and wait | No preemption | Circular wait | Deadlock possible? |
+|--------------|:---:|:---:|:---:|:---:|---|
+| `none` | holds | holds | holds | holds | **yes**: `deadlock.csv` hangs |
+| `avoid` | holds | holds | holds | holds | no: the Banker's algorithm never enters an unsafe state, so the conditions never combine into a deadlock |
+| `prevent` | holds | holds | holds | **broken** | no: each task acquires in the order TRUCK < BOAT < MED_KIT < FOOD_KIT |
+| `prevent --all-or-nothing` | holds | **broken** | holds | holds | no: a task gets everything in one request or nothing |
+| `detect` | holds | holds | **broken** (on recovery) | holds | yes, but it is found and broken |
+
+Mutual exclusion is never broken: a truck or a boat cannot be shared.
+
+### How each mode works (`src/deadlock/deadlock.c`, `src/reliefd/resmgr.c`)
+- **`none`** (`deadlock_grant_if_free`): grant whenever the request fits Available, otherwise the
+  request waits.
+- **`prevent`** (`deadlock_ordered`):
+  - A request is rejected (`event=reject_order`, `MSG_REJECT` with `REQ_FLAG_ORDER`) while its
+    *task* holds a resource ordered after it. Every request carries its task id in
+    `relief_bundle_t.task`.
+  - The camp then releases that task's rows and acquires them again in order.
+  - The order is per task, not per camp. A camp runs independent tasks, and enforcing it per camp
+    let one task block behind another task of the same camp, which hung the random mix.
+- **`prevent --all-or-nothing`:**
+  - reliefd starts the camps with `--all-or-nothing`, and each task is sent once all its rows are
+    due, as one `REQ_FLAG_BUNDLE` request with the whole vector. It is granted only all at once.
+  - A bundle's kit crates go on to the loading dock as one package per kit type.
+- **`detect`:** grant-if-free plus a detector thread that wakes every `--detect-interval` seconds
+  (default 1):
+  1. It builds the **wait-for graph** (`src/deadlock/waitfor.c`) from the Allocation and Request
+     tables. There is an edge X → Y when X waits for units of a resource that is not available and
+     Y holds some of it.
+  2. It looks for a cycle with **DFS** (white/grey/black colouring: an edge to a grey node closes a
+     cycle).
+  3. With several instances per type, a cycle is necessary but not sufficient. So the cycle is
+     confirmed with the multi-instance **detection algorithm** (`banker_detect`: Work/Finish with
+     the Request matrix).
+  4. On a confirmed deadlock it logs `event=deadlock_detected cycle=camp1->camp2->camp1` and
+     recovers.
+  5. **Recovery:** the camp in the cycle whose waiting request has the lowest severity is the
+     victim. Its grant of a vehicle that the previous camp in the cycle waits for is rolled back
+     and the request is queued again (`event=recovery ... requeued=1`). The camp gets `MSG_REVOKE`
+     and waits for a new GRANT.
+  6. **Edge case:** a camp that already released a revoked grant just gets the requeued copy
+     dropped (`stray_release`), and a GRANT for something it no longer wants is handed straight
+     back.
+- **Message order:** before reaping exited camps, reliefd reads what is still in the request
+  queue. A camp's last RELEASEs and BYE are handled before the exit releases what it still holds.
+
+`reliefctl waitfor` prints the graph from shared memory (`bk_proc[].request`) as edges, plus any
+cycle. With `--dot` it prints Graphviz DOT, and `docs/waitfor.dot` is a live capture of
+`deadlock.csv` under `none`:
+```sh
+sudo apt install graphviz
+dot -Tpng docs/waitfor.dot -o docs/waitfor.png
+```
+
 ## Structured log (`$RELIEF_HOME/logs/reliefd.log`)
 One event per line: `ts=<iso8601> level=<lvl> comp=reliefd pid=<pid> event=<name> key=value ...`.
 Values contain no spaces, except `msg="..."` on free-form `event=log` lines. Events include

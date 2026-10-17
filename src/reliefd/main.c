@@ -605,6 +605,15 @@ int main(int argc, char **argv)
         resmgr_publish(st.rm, st.shm);
         if (g_child) {
             g_child = 0;            /* clear before reaping so no SIGCHLD is lost */
+            /* Whatever a camp sent before it exited is already queued: handle it first, so
+             * its last RELEASEs and BYE come before the exit releases all it still holds. */
+            int r0;
+            while ((r0 = receive_one(mq, 0, &camps, &st)) == RECV_MSG)
+                ;
+            if (r0 == RECV_SHUTDOWN) {
+                shutdown_msg = 1;
+                break;
+            }
             camps_reap(&camps, 0);
         }
         if (camps.dirty) {          /* keep the status table and camps.pids current */
