@@ -22,13 +22,15 @@ reliefd (`--policy`, `--teams`), and `schedsim` replays scenarios offline.
 - `reliefd`: the coordinator daemon (C11, pthreads)
 - `camp`: one process per relief camp, started by reliefd. It sends requests to reliefd over `/reliefos_requests`
 - `reliefctl`: Bash CLI
+- `reliefui`: live ncurses dashboard, like htop (`make ui` or `scripts/reliefctl ui`)
+- `scripts/demo.sh`: a guided demo of Phases 1-3, one syllabus topic per step (`-u` adds the dashboard)
 - `relief.ko`: kernel module exposing `/proc/relief` (Phase 6)
 - `systemd/reliefd.service`: systemd unit template (Phase 6)
 
 ## Prerequisites
 Ubuntu 24.04 (WSL2 works):
 ```sh
-sudo apt install build-essential valgrind shellcheck
+sudo apt install build-essential valgrind shellcheck libncurses-dev   # ncurses: the reliefui dashboard
 ```
 
 ## Build, run, test
@@ -45,6 +47,7 @@ make test            # tests/sched.sh (textbook FCFS/SJF/SRTF/RR/prio/MLFQ unit 
                      # tests/sync.sh (bounded buffer, readers-writers, rwlab), tests/dock.sh (loading dock),
                      # tests/banker.sh (Banker's algorithm: textbook example, live grants/releases),
                      # tests/deadlock.sh (deadlock.csv under none/prevent/avoid/detect, waitfor)
+make ui              # live ncurses dashboard (build/reliefui); s starts ReliefOS from inside it
 make tsan            # ThreadSanitizer build (build/tsan/) + tests
 make valgrind        # tests under valgrind (camps too)
 make e1              # experiment E1: 9 variants x 5 seeds + E1b load sweep -> experiments/results/e1*.csv + graphs
@@ -156,6 +159,18 @@ scripts/reliefctl report        # grants, unsafe/unavailable waits, average wait
 build/test_banker               # textbook example: safe sequence <P1, P3, P4, P0, P2>
 ```
 
+### Live dashboard: reliefui
+`scripts/reliefctl ui` (or `make ui`) opens an htop-like view that refreshes every 500 ms:
+- **top bar:** daemon pid, uptime, policy, deadlock mode, requests and requests/s;
+- **camps:** pid, process state from `/proc/<pid>/stat`, requests sent, restarts, heartbeat (green < 2 s, yellow < 5 s, red);
+- **scheduler:** ready-queue bars per level, and what each rescue team is doing;
+- **resources:** the Banker's Available/Total bars, safe or unsafe, and the dock's 8 slots;
+- **events:** the last 15 events, coloured by type.
+
+Keys: `q` quit, `p` pause, `a` alert a camp, `d` dump, `k` kill -9 a camp (watch reliefd restart it), `s` start/stop, `?` help.
+It copies the shared-memory table with the lock-free seqlock and never takes reliefd's mutex.
+Without a terminal, `reliefui --batch N` draws N frames to stdout (tests).
+
 ### Deadlock: none, prevent, detect
 `scenarios/deadlock.csv` is a reproducible circular wait: camps 1 and 2 each hold a truck and a boat and ask
 for the other's. Rows sharing the optional 7th CSV column (`task`) are acquired one after another and held
@@ -194,6 +209,7 @@ and `logs/reliefd.out` (raw stderr). You never need root.
 | `stop`     | Stops reliefd with SIGTERM. reliefd stops and reaps every camp |
 | `status [--json]` | Shows whether reliefd is running, then the live camp table from shared memory (`reliefstat`): pid, state, requests sent, heartbeat, restarts |
 | `sched [--json]` | Live scheduler: policy, ready queue per level, and what each rescue team is working on |
+| `ui` | Live ncurses dashboard (`build/reliefui`); keys `q p a d k s ?`; works before `start` too |
 | `waitfor [--dot]` | Wait-for graph: `campX -> campY [RESOURCE]` edges and any cycle; `--dot` prints Graphviz DOT |
 | `banker [--json]` | Banker's algorithm in textbook layout: Allocation, Max, Need and Available per camp, and a safe sequence of the current state |
 | `alert <id\|all>` | Evacuation alert (SIGUSR1). The camp's next 5 requests are sent as CRITICAL |

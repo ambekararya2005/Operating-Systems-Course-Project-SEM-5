@@ -12,9 +12,11 @@
 #                     releases, Available replay, reliefctl banker, crash release)
 #                   + tests/deadlock.sh (deadlock.csv under none/prevent/avoid/detect, waitfor, mix)
 #                   + tests/phase3_check.sh (gate M3: critical section, dock, Banker's, zero deadlocks in E3)
+#                   + tests/ui.sh (reliefui --batch: dashboard drawn from the status table)
 #   make tsan       ThreadSanitizer build in build/tsan/ + tests
 #   make valgrind   tests with reliefd and camps under valgrind
 #   make run        run reliefd in the foreground (RELIEF_HOME=./run)
+#   make ui         build and open the live ncurses dashboard (build/reliefui)
 #   make e1         experiment E1: policy comparison -> experiments/results/e1.csv + PNGs
 #                   (figures also copied to docs/figures/e1/ for EXPERIMENTS.md)
 #   make e2         experiment E2: real Linux scheduling (CFS/EEVDF+nice, FIFO, RR) vs simulated
@@ -60,6 +62,9 @@ LINUXSCHED_SRC := src/linuxsched/main.c $(SCHED_SRC)
 LINUXSCHED_OBJ := $(LINUXSCHED_SRC:%.c=$(OBJ)/%.o)
 RACELAB_SRC := src/racelab/main.c
 RACELAB_OBJ := $(RACELAB_SRC:%.c=$(OBJ)/%.o)
+# Live ncurses dashboard (reads the status table read-only; links ncurses).
+RELIEFUI_SRC := src/reliefui/main.c src/common/shm.c src/deadlock/banker.c
+RELIEFUI_OBJ := $(RELIEFUI_SRC:%.c=$(OBJ)/%.o)
 DLSIM_SRC := src/dlsim/dlsim.c src/common/resconf.c $(DEADLOCK_SRC)
 DLSIM_OBJ := $(DLSIM_SRC:%.c=$(OBJ)/%.o)
 RWLAB_SRC := src/rwlab/main.c src/common/rwsync.c
@@ -78,7 +83,7 @@ SHM_DIE_OBJ := $(SHM_DIE_SRC:%.c=$(OBJ)/%.o)
 TESTS := tests/smoke.sh tests/camps.sh tests/traffic.sh tests/signals.sh tests/status.sh tests/cli.sh \
          tests/phase1_smoke.sh tests/sched.sh tests/dispatch.sh tests/linuxsched.sh tests/phase2_check.sh \
          tests/racelab.sh tests/sync.sh tests/dock.sh tests/banker.sh tests/deadlock.sh \
-         tests/phase3_check.sh
+         tests/phase3_check.sh tests/ui.sh
 
 # --trace-children: camps exec'd by reliefd also run under valgrind.
 VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
@@ -88,9 +93,9 @@ VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
 # $(call run_tests,ENV...) runs every test script with the given environment.
 run_tests = for t in $(TESTS); do echo "== $$t"; $(1) $$t || exit 1; done
 
-.PHONY: all reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim clean run test tsan valgrind e1 e2 e3 e4 e4b
+.PHONY: all reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim reliefui ui clean run test tsan valgrind e1 e2 e3 e4 e4b
 
-all: reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim $(BUILD)/shm_die_locked $(BUILD)/test_sched \
+all: reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim reliefui $(BUILD)/shm_die_locked $(BUILD)/test_sched \
      $(BUILD)/test_sync $(BUILD)/test_banker
 
 reliefd: $(BUILD)/reliefd
@@ -101,6 +106,7 @@ linuxsched: $(BUILD)/linuxsched
 racelab: $(BUILD)/racelab
 rwlab: $(BUILD)/rwlab
 dlsim: $(BUILD)/dlsim
+reliefui: $(BUILD)/reliefui
 
 $(BUILD)/reliefd: $(RELIEFD_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
@@ -122,6 +128,13 @@ $(BUILD)/linuxsched: $(LINUXSCHED_OBJ)
 
 $(BUILD)/racelab: $(RACELAB_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/reliefui: $(RELIEFUI_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lncurses
+
+# The dashboard, in this terminal (start ReliefOS from it with s, or scripts/reliefctl start).
+ui: $(BUILD)/reliefui
+	./$(BUILD)/reliefui
 
 $(BUILD)/dlsim: $(DLSIM_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
@@ -199,4 +212,4 @@ clean:
 
 -include $(RELIEFD_OBJ:.o=.d) $(CAMP_OBJ:.o=.d) $(RELIEFSTAT_OBJ:.o=.d) $(SHM_DIE_OBJ:.o=.d) \
          $(SCHEDSIM_OBJ:.o=.d) $(TEST_SCHED_OBJ:.o=.d) $(LINUXSCHED_OBJ:.o=.d) \
-         $(RACELAB_OBJ:.o=.d) $(RWLAB_OBJ:.o=.d) $(DLSIM_OBJ:.o=.d) $(TEST_SYNC_OBJ:.o=.d) $(TEST_BANKER_OBJ:.o=.d)
+         $(RACELAB_OBJ:.o=.d) $(RWLAB_OBJ:.o=.d) $(DLSIM_OBJ:.o=.d) $(RELIEFUI_OBJ:.o=.d) $(TEST_SYNC_OBJ:.o=.d) $(TEST_BANKER_OBJ:.o=.d)

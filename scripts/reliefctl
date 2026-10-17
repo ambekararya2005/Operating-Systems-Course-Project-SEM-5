@@ -49,6 +49,8 @@ commands:
   sched [--json]        live scheduler: policy, ready queue per level, what each team works on
   banker [--json]       Banker's algorithm: Allocation, Max, Need and Available per camp, and a
                         safe sequence of the current state (from shared memory)
+  ui                    live ncurses dashboard (build/reliefui): camps, scheduler, Banker's
+                        resources, dock, events; keys q p a d k s ? (works before start too)
   waitfor [--dot]       the wait-for graph: "campX -> campY [RESOURCE]" edges and any cycle;
                         --dot prints Graphviz DOT (dot -Tpng waitfor.dot -o waitfor.png)
   ps                    per-process PCB fields from /proc for reliefd and every camp
@@ -548,6 +550,12 @@ cmd_banker() {
     fi
 }
 
+cmd_ui() {
+    [[ -x "$BIN_DIR/reliefui" ]] || die "reliefui not built; run 'make' first"
+    # The dashboard calls this script for start/stop/alert/dump, with the same RELIEF_HOME.
+    RELIEFCTL="$ROOT/scripts/$PROG" exec "${WRAP[@]}" "$BIN_DIR/reliefui" "$@"
+}
+
 cmd_waitfor() {
     local opt dot=0 stat="$BIN_DIR/reliefstat"
     long_to_short "dot=d" "$@"
@@ -671,6 +679,7 @@ main() {
         sched)          cmd_sched "$@" ;;
         banker)         cmd_banker "$@" ;;
         waitfor)        cmd_waitfor "$@" ;;
+        ui)             cmd_ui "$@" ;;
         ps)             cmd_ps "$@" ;;
         tree)           cmd_tree "$@" ;;
         alert)          cmd_alert "$@" ;;

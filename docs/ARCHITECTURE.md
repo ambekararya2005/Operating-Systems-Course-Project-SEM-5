@@ -9,6 +9,7 @@
 - **camp**: one process per relief camp; client of the request queue
 - **reliefctl**: Bash control CLI
 - **reliefstat**: read-only viewer of the live status table
+- **reliefui**: live ncurses dashboard over the same table (`src/reliefui/main.c`)
 - **schedsim**: offline, deterministic scheduling simulator (Phase 2)
 - **linuxsched**: real threads under the Linux scheduler (CFS/EEVDF + nice, SCHED_FIFO, SCHED_RR) for E2
 - **relief.ko**: kernel module exposing `/proc/relief` (Phase 6)
@@ -594,6 +595,15 @@ shm lock. Each copies its state under its own lock, releases it, then takes the 
   `resmgr.lock`, but with a bounded `mq_timedsend` (5 × 100 ms). A camp that stops reading can
   delay the allocator, never block it forever. An undeliverable grant is undone, so the Banker's
   state stays consistent.
+
+**Readers outside the hierarchy:**
+- `reliefstat` and `reliefui` map the status table read-only and copy it with the seqlock
+  (`relief_shm_snapshot`). They never take the shm mutex, so neither can delay a writer.
+- That matters for the dashboard. Drawing is slow terminal I/O, and a UI stopped with Ctrl-Z in
+  the middle of a copy would otherwise hold the lock indefinitely, because a robust mutex only
+  recovers when its holder dies, not when it is stopped.
+- The UI also reads `/proc/<pid>/stat` for the camps' states and the tail of `reliefd.log`. It
+  runs `reliefctl` for start/stop/alert/dump, and `kill(SIGKILL)` for `k`.
 
 **Signals and processes:** worker threads block every signal, so handlers (which only set flags)
 always run on the main thread, where no lock is held at that point. A camp is single-threaded. It takes the shm lock to update its own row, and inside it at most its
