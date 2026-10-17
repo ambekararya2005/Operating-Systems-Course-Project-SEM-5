@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # OS concept: The readers-writers problem — writer starvation, readers preference (semaphores)
-#             vs writer preference (pthread rwlock) — experiment E5 — Unit 3
+#             vs writer preference (pthread rwlock) — experiment E4b — Unit 3
 #
-# E5: build/rwlab with 8 readers and 1 writer, R runs of each readers-writers kind (runs
+# E4b: build/rwlab with 8 readers and 1 writer, R runs of each readers-writers kind (runs
 # interleaved), then a per-kind summary of the writer's waits and the reads/writes done.
 #
-#   usage: run_e5.sh [-r RUNS] [-s SECONDS]
+#   usage: run_e4b.sh [-r RUNS] [-s SECONDS]
 #     -r  runs per kind (default 5)
 #     -s  seconds per run (default 2)
 #   env: BIN_DIR (default build), RESULTS (default experiments/results)
 #
-# Output: $RESULTS/e5.csv, one row per kind and run. Real measurements: they vary between runs.
+# Output: $RESULTS/e4b.csv, one row per kind and run. Real measurements: they vary between runs.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -35,9 +35,9 @@ shift $((OPTIND - 1))
 [[ -x "$BIN/rwlab" ]] || { echo "$PROG: $BIN/rwlab not built; run 'make'" >&2; exit 1; }
 
 mkdir -p "$RESULTS"
-OUT="$RESULTS/e5.csv"
+OUT="$RESULTS/e4b.csv"
 rm -f "$OUT"
-echo "E5: $(nproc) CPUs, kernel $(uname -r), rwlab 8 readers (100 us reads) + 1 writer (20 us writes, every 2 ms), $secs s x $runs runs"
+echo "E4b: $(nproc) CPUs, kernel $(uname -r), rwlab 8 readers (100 us reads) + 1 writer (20 us writes, every 2 ms), $secs s x $runs runs"
 for r in $(seq "$runs"); do
     for k in semaphore rwlock; do
         "$BIN/rwlab" --rw "$k" --seconds "$secs" --csv "$OUT" --run "$r" > /dev/null

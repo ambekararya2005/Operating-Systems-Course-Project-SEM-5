@@ -25,8 +25,8 @@
 #   make e4         experiment E4: critical-section protection, every racelab mode x 10 runs ->
 #                   experiments/results/e4.csv + PNGs (copied to docs/figures/e4/), and the
 #                   strace futex counts in docs/strace_futex.txt
-#   make e5         experiment E5: readers-writers starvation, rwlab semaphore vs rwlock x 5 runs ->
-#                   experiments/results/e5.csv + summary table
+#   make e4b        experiment E4b: readers-writers starvation, rwlab semaphore vs rwlock x 5 runs ->
+#                   experiments/results/e4b.csv + summary table
 
 CC       ?= gcc
 BUILD    ?= build
@@ -88,7 +88,7 @@ VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
 # $(call run_tests,ENV...) runs every test script with the given environment.
 run_tests = for t in $(TESTS); do echo "== $$t"; $(1) $$t || exit 1; done
 
-.PHONY: all reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim clean run test tsan valgrind e1 e2 e3 e4 e5
+.PHONY: all reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim clean run test tsan valgrind e1 e2 e3 e4 e4b
 
 all: reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim $(BUILD)/shm_die_locked $(BUILD)/test_sched \
      $(BUILD)/test_sync $(BUILD)/test_banker
@@ -190,9 +190,9 @@ e4: racelab
 	@mkdir -p docs/figures/e4
 	cp $(addprefix experiments/results/,$(E4_FIGS)) docs/figures/e4/
 
-# Experiment E5 (real threads; a table, no plot).
-e5: rwlab
-	experiments/run_e5.sh
+# Experiment E4b (real threads; a table, no plot).
+e4b: rwlab
+	experiments/run_e4b.sh
 
 clean:
 	rm -rf build

@@ -53,7 +53,7 @@ make e2              # experiment E2: real threads under CFS/EEVDF+nice, SCHED_F
 make e3              # experiment E3: deadlock modes compared with build/dlsim (deterministic) -> graphs
 make e4              # experiment E4: every racelab mode x 10 runs -> experiments/results/e4.csv + graphs,
                      #   plus strace futex counts in docs/strace_futex.txt (sudo apt install strace)
-make e5              # experiment E5: readers-writers writer starvation, rwlab semaphore vs rwlock
+make e4b             # experiment E4b: readers-writers writer starvation, rwlab semaphore vs rwlock
 make clean
 ```
 
@@ -228,7 +228,7 @@ run it every 10 minutes, add this with `crontab -e`:
 | 3 | Critical section, Peterson's solution, mutex, TAS spinlock, semaphores, futex | `build/racelab`: two camps / one boat / one counter, experiment E4, strace of futex | 3 |
 | 3 | Producer-consumer (bounded buffer, empty/full/mutex semaphores) | reliefd loading dock: warehouse producer threads → dock → truck threads (`src/reliefd/dock.c`) | 3 |
 | 3 | Deadlock avoidance: Banker's algorithm (safety + resource-request) | Trucks, boats and kit crates granted only in safe states; `reliefctl banker` (`src/deadlock/`, `src/reliefd/resmgr.c`) | 3 |
-| 3 | Readers-writers (readers preference vs writer preference) | Inventory behind `rwsync` (semaphore or pthread rwlock); `build/rwlab`, experiment E5 | 3 |
+| 3 | Readers-writers (readers preference vs writer preference) | Inventory behind `rwsync` (semaphore or pthread rwlock); `build/rwlab`, experiment E4b | 3 |
 | 3 | Deadlock characterization (Coffman conditions), prevention (resource ordering, all-or-nothing), detection (wait-for graph + DFS) and recovery (preemption) | `reliefd --deadlock none/prevent/detect`, `scenarios/deadlock.csv`, `reliefctl waitfor` | 3 |
 | 4 | First/best/worst fit, buddy system, slab allocator | Warehouse space, pre-packed relief kits | 4 |
 | 4 | FIFO/LRU/Optimal replacement, thrashing | Perishable stock (plus expiry-first) | 4 |

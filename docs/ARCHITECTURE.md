@@ -385,7 +385,7 @@ main thread (mq loop)             P producer threads                  C truck th
     starve a writer.
   - `rwlock` (the default): `pthread_rwlock_t` with `PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP`.
     A waiting writer blocks new readers.
-- **`build/rwlab`** measures the difference (E5).
+- **`build/rwlab`** measures the difference (E4b).
 - **Lock order:** the inventory lock and the dock `mutex` are never held together with the shm
   lock. Each publisher copies under its own lock, releases it, then writes the shm.
 

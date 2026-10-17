@@ -89,7 +89,7 @@ Layout (folders marked * are created in later phases):
   being loaded.
 
 ## Commands
-- `make [test|tsan|valgrind|clean|e1|e2|e3|e4|e5]`: tsan runs under `setarch -R` (GCC 13 vs WSL2 ASLR); plots need matplotlib.
+- `make [test|tsan|valgrind|clean|e1|e2|e3|e4|e4b]`: tsan runs under `setarch -R` (GCC 13 vs WSL2 ASLR); plots need matplotlib.
   E2 fifo/rr need `sudo setcap cap_sys_nice+ep build/linuxsched` (lost on every rebuild; the user runs sudo)
 - `scripts/reliefctl start|stop|status [--json]|sched [--json]|banker [--json]|waitfor [--dot]|ps|tree`, `alert|dump <id|all>` (SIGUSR1: next 5 requests CRITICAL;
   SIGUSR2: counters), `report [--since MIN] [--last-run]` (incl. scheduler per-severity waits), `simulate flood
@@ -116,5 +116,5 @@ Layout (folders marked * are created in later phases):
 Work the phases in order. Within a phase, ship all P0 features before any P1/P2.
 
 ## Current status
-Phase 2 complete (gate M2). Phase 3 complete (gate M3: `tests/phase3_check.sh`; E3, E4, E5 and the lock hierarchy in docs). Next: Phase 4.
+Phase 2 complete (gate M2). Phase 3 complete (gate M3: `tests/phase3_check.sh`; E3, E4, E4b and the lock hierarchy in docs). Next: Phase 4.
 Update this line as steps complete.

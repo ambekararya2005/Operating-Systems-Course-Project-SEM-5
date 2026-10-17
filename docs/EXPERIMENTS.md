@@ -10,7 +10,7 @@ Every experiment is deterministic for a given `--seed` and writes CSV to `experi
 | E2 | Traditional and modern UNIX scheduling (Unit 2) | How do Linux's CFS/EEVDF + nice, SCHED_FIFO and SCHED_RR treat the same rescue workload, compared with textbook priority and our MLFQ? | done |
 | E3 | Deadlock prevention, avoidance, detection and recovery (Unit 3) | What does each way of handling deadlock cost on the same vehicle-heavy workload? | done |
 | E4 | Critical-section problem, Peterson, semaphores; synchronisation in Linux (Unit 3) | Which entry/exit sections keep a shared counter correct, what does each cost, and when does a Linux mutex enter the kernel? | done |
-| E5 | Readers-writers problem (Unit 3) | Does the textbook readers-preference solution starve writers, and does a writer-preference rwlock fix it? | done |
+| E4b | Readers-writers problem (Unit 3) | Does the textbook readers-preference solution starve writers, and does a writer-preference rwlock fix it? | done |
 
 ## E1: triage scheduling comparison
 
@@ -528,18 +528,18 @@ modify and write, inside the entry and exit sections of mode M:
 - The Linux primitives (futex-based mutex and semaphore) and a test-and-set spinlock are all correct.
   The mutex costs about 21 ns per increment here, and it only enters the kernel when there is a waiter.
 
-## E5: readers–writers, writer starvation
+## E4b: readers–writers, writer starvation
 **Question:** The inventory is read by many threads and written rarely. Does the textbook
 readers-preference solution (semaphores `mutex` and `rw_mutex`, plus `read_count`) starve the
 writer? Does glibc's writer-preference rwlock fix that, and what does it cost the readers?
 
-**Setup:** `make e5` (`experiments/run_e5.sh`) runs `build/rwlab --rw semaphore|rwlock`:
+**Setup:** `make e4b` (`experiments/run_e4b.sh`) runs `build/rwlab --rw semaphore|rwlock`:
 - 8 reader threads each hold the read lock for 100 µs, reading the whole inventory table, and
   re-enter at once.
 - 1 writer thread updates the table (20 µs under the write lock) every 2 ms.
 - Each run lasts 2 s; 5 runs per kind, interleaved, on 16 CPUs (WSL2, kernel 6.18).
 - Every lock acquisition is timed, and every read checks that the table is not half-written.
-- Results go to `experiments/results/e5.csv`. The numbers are real timings and vary between runs.
+- Results go to `experiments/results/e4b.csv`. The numbers are real timings and vary between runs.
 
 | Lock (`--rw`) | Writes during the 2 s (mean per run) | Writer wait, mean | Writer wait, max | Reads per run | Reader wait, max | Torn reads |
 |---------------|------:|------:|------:|------:|------:|---:|
