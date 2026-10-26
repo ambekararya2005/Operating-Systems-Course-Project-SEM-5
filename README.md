@@ -352,12 +352,6 @@ run it every 10 minutes, add this with `crontab -e`:
 */10 * * * * RELIEF_HOME=$HOME/os-course-project-sem5/run $HOME/os-course-project-sem5/scripts/stockcheck.sh -t 50 -w 10 -q
 ```
 
-## Repository layout
-See [CLAUDE.md](CLAUDE.md) for the layout and conventions. Design notes are in [docs/](docs/):
-ARCHITECTURE.md, EXPERIMENTS.md, SYSCALLS.md and KERNEL.md.
 
-## Team
-| Name | Roll no. | Responsibilities |
-|------|----------|------------------|
-| _TBD_ | | |
-| _TBD_ | | |
+
+
