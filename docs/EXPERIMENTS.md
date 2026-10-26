@@ -12,6 +12,7 @@ Every experiment is deterministic for a given `--seed` and writes CSV to `experi
 | E4 | Critical-section problem, Peterson, semaphores; synchronisation in Linux (Unit 3) | Which entry/exit sections keep a shared counter correct, what does each cost, and when does a Linux mutex enter the kernel? | done |
 | E4b | Readers-writers problem (Unit 3) | Does the textbook readers-preference solution starve writers, and does a writer-preference rwlock fix it? | done |
 | E5 | Memory allocation and fragmentation (Unit 4) | How do first/best/worst fit, the buddy system and slab allocation compare on the same shipment trace? | done |
+| E6 | Virtual memory: page replacement (Unit 4) | How do FIFO, LRU, Optimal and expiry-first trade stock-outs (page faults) against expired stock as shelf space grows? | done |
 
 ## E1: triage scheduling comparison
 
@@ -597,6 +598,38 @@ Means over 5 seeds; the error bars in the figure show the min–max.
 - **The slab caches fail least (3.8%), with no external fragmentation:** any free frame fits any kit.
   The cost is 16% of the slab space sitting in half-empty slabs. For pre-packed, fixed-size kits,
   slabs are the right warehouse layout.
+
+## E6: perishables on the shelf, page replacement
+**Question:** As a camp gets more shelf slots (page frames), how do FIFO, LRU, Optimal and
+expiry-first compare on stock-outs (page faults)? How much stock does each let expire?
+
+**Setup:** `make e6` (`experiments/run_e6.sh`) runs `build/pagesim`:
+- **Trace:** one perishables trace (seed 1), 300 references over 12 items.
+  - Each item has a shelf life of 5–60 time units.
+  - 80% of references come from a working set of 4 items that moves every 40 references.
+- **Replay:** with 1–10 frames under each policy.
+- **Expiry:** stock past its expiry date can't be used: needing it is a fault, and it counts as
+  expired.
+
+| Frames | FIFO faults / expired | LRU | Optimal | expiry-first |
+|------:|------:|------:|------:|------:|
+| 3 | 134 / 1 | 128 / 1 | **90** / 6 | 136 / **0** |
+| 5 | 95 / 6 | 84 / 9 | **65** / 20 | 94 / **1** |
+| 8 | 61 / 37 | 62 / 35 | 59 / 37 | 59 / 39 |
+| 10 | 59 / 50 | 60 / 50 | 59 / 46 | 59 / 51 |
+
+![Faults vs frames](figures/e6/e6_faults_vs_frames.png)
+
+**Conclusion:**
+1. **Optimal is the lower bound on faults** (90 vs 128–136 at 3 frames). LRU beats FIFO while the
+   working set moves (95 vs 110 at 4). On this trace FIFO never shows Belady's anomaly; the unit
+   test shows it on 1,2,3,4,1,2,5,1,2,3,4,5 (9 faults with 3 frames, 10 with 4).
+2. **Fewer faults is not less waste.** Optimal keeps stock until its next use, so it lets the most
+   expire (20 units at 5 frames). Expiry-first has about FIFO's faults but almost no waste while shelves
+   are scarce (0–1 expired up to 5 frames).
+3. **Beyond the working set (about 8 frames), more shelf space buys nothing.** Faults level off at
+   about 59, mostly first stockings and restocking expired stock rather than lack of space. Meanwhile more stock expires (up to 51):
+   there, freshness, not space, is the limit.
 
 ## Baseline (Phase 2 step 2)
 `schedsim --teams 3` on `scenarios/flood_pune.csv` (200 requests in 360 min, permanently overloaded). The

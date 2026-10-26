@@ -15,6 +15,7 @@
 #                   + tests/ui.sh (reliefui --batch: dashboard drawn from the status table)
 #                   + tests/web.sh (web/server.py: status, events, allow-listed actions, figures)
 #                   + tests/mem.sh (test_mem: textbook fits, buddy, slab; memsim determinism, --show)
+#                   + tests/page.sh (test_page: FIFO 15 / LRU 12 / OPT 9, Belady; pagesim --verbose)
 #   make tsan       ThreadSanitizer build in build/tsan/ + tests
 #   make valgrind   tests with reliefd and camps under valgrind
 #   make run        run reliefd in the foreground (RELIEF_HOME=./run)
@@ -31,6 +32,8 @@
 #                   strace futex counts in docs/strace_futex.txt
 #   make e5         experiment E5: first/best/worst fit, buddy, slab on the same trace x 5 seeds ->
 #                   experiments/results/e5.csv + PNG (copied to docs/figures/e5/)
+#   make e6         experiment E6: page faults vs frames (1-10), FIFO/LRU/Optimal/expiry-first ->
+#                   experiments/results/e6.csv + PNG (copied to docs/figures/e6/)
 #   make e4b        experiment E4b: readers-writers starvation, rwlab semaphore vs rwlock x 5 runs ->
 #                   experiments/results/e4b.csv + summary table
 
@@ -73,6 +76,10 @@ RELIEFUI_OBJ := $(RELIEFUI_SRC:%.c=$(OBJ)/%.o)
 MEM_SRC := src/mem/mem.c src/mem/fit.c src/mem/buddy.c src/mem/slab.c
 MEMSIM_SRC := src/mem/memsim.c $(MEM_SRC)
 MEMSIM_OBJ := $(MEMSIM_SRC:%.c=$(OBJ)/%.o)
+PAGESIM_SRC := src/mem/pagesim.c src/mem/paging.c
+PAGESIM_OBJ := $(PAGESIM_SRC:%.c=$(OBJ)/%.o)
+TEST_PAGE_SRC := tests/test_page.c src/mem/paging.c
+TEST_PAGE_OBJ := $(TEST_PAGE_SRC:%.c=$(OBJ)/%.o)
 TEST_MEM_SRC := tests/test_mem.c $(MEM_SRC)
 TEST_MEM_OBJ := $(TEST_MEM_SRC:%.c=$(OBJ)/%.o)
 DLSIM_SRC := src/dlsim/dlsim.c src/common/resconf.c $(DEADLOCK_SRC)
@@ -94,7 +101,7 @@ TESTS := tests/smoke.sh tests/camps.sh tests/traffic.sh tests/signals.sh tests/s
          tests/phase1_smoke.sh tests/sched.sh tests/dispatch.sh tests/linuxsched.sh tests/phase2_check.sh \
          tests/racelab.sh tests/sync.sh tests/dock.sh tests/banker.sh tests/deadlock.sh \
          tests/phase3_check.sh tests/ui.sh tests/web.sh \
-         tests/mem.sh
+         tests/mem.sh tests/page.sh
 
 # --trace-children: camps exec'd by reliefd also run under valgrind.
 VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
@@ -104,10 +111,10 @@ VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
 # $(call run_tests,ENV...) runs every test script with the given environment.
 run_tests = for t in $(TESTS); do echo "== $$t"; $(1) $$t || exit 1; done
 
-.PHONY: all reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim reliefui memsim ui clean run test tsan valgrind e1 e2 e3 e4 e4b e5
+.PHONY: all reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim reliefui memsim pagesim ui clean run test tsan valgrind e1 e2 e3 e4 e4b e5 e6
 
-all: reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim reliefui memsim $(BUILD)/shm_die_locked $(BUILD)/test_sched \
-     $(BUILD)/test_sync $(BUILD)/test_banker $(BUILD)/test_mem
+all: reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim reliefui memsim pagesim $(BUILD)/shm_die_locked $(BUILD)/test_sched \
+     $(BUILD)/test_sync $(BUILD)/test_banker $(BUILD)/test_mem $(BUILD)/test_page
 
 reliefd: $(BUILD)/reliefd
 camp: $(BUILD)/camp
@@ -118,6 +125,7 @@ racelab: $(BUILD)/racelab
 rwlab: $(BUILD)/rwlab
 dlsim: $(BUILD)/dlsim
 memsim: $(BUILD)/memsim
+pagesim: $(BUILD)/pagesim
 reliefui: $(BUILD)/reliefui
 
 $(BUILD)/reliefd: $(RELIEFD_OBJ)
@@ -149,6 +157,12 @@ ui: $(BUILD)/reliefui
 	./$(BUILD)/reliefui
 
 $(BUILD)/memsim: $(MEMSIM_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/pagesim: $(PAGESIM_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/test_page: $(TEST_PAGE_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/test_mem: $(TEST_MEM_OBJ)
@@ -228,6 +242,13 @@ e5: memsim
 	@mkdir -p docs/figures/e5
 	cp experiments/results/e5_fragmentation.png docs/figures/e5/
 
+# Experiment E6 (deterministic: same seed -> identical CSV).
+e6: pagesim
+	experiments/run_e6.sh
+	python3 -I experiments/plot_e6.py
+	@mkdir -p docs/figures/e6
+	cp experiments/results/e6_faults_vs_frames.png docs/figures/e6/
+
 # Experiment E4b (real threads; a table, no plot).
 e4b: rwlab
 	experiments/run_e4b.sh
@@ -237,4 +258,4 @@ clean:
 
 -include $(RELIEFD_OBJ:.o=.d) $(CAMP_OBJ:.o=.d) $(RELIEFSTAT_OBJ:.o=.d) $(SHM_DIE_OBJ:.o=.d) \
          $(SCHEDSIM_OBJ:.o=.d) $(TEST_SCHED_OBJ:.o=.d) $(LINUXSCHED_OBJ:.o=.d) \
-         $(RACELAB_OBJ:.o=.d) $(RWLAB_OBJ:.o=.d) $(DLSIM_OBJ:.o=.d) $(RELIEFUI_OBJ:.o=.d) $(MEMSIM_OBJ:.o=.d) $(TEST_MEM_OBJ:.o=.d) $(TEST_SYNC_OBJ:.o=.d) $(TEST_BANKER_OBJ:.o=.d)
+         $(RACELAB_OBJ:.o=.d) $(RWLAB_OBJ:.o=.d) $(DLSIM_OBJ:.o=.d) $(RELIEFUI_OBJ:.o=.d) $(MEMSIM_OBJ:.o=.d) $(TEST_MEM_OBJ:.o=.d) $(PAGESIM_OBJ:.o=.d) $(TEST_PAGE_OBJ:.o=.d) $(TEST_SYNC_OBJ:.o=.d) $(TEST_BANKER_OBJ:.o=.d)

@@ -59,6 +59,7 @@ make e3              # experiment E3: deadlock modes compared with build/dlsim (
 make e4              # experiment E4: every racelab mode x 10 runs -> experiments/results/e4.csv + graphs,
                      #   plus strace futex counts in docs/strace_futex.txt (sudo apt install strace)
 make e5              # experiment E5: first/best/worst fit, buddy, slab on one shipment trace -> graph
+make e6              # experiment E6: page faults vs frames, FIFO/LRU/Optimal/expiry-first -> graph
 make e4b             # experiment E4b: readers-writers writer starvation, rwlab semaphore vs rwlock
 make clean
 ```
@@ -172,6 +173,15 @@ It reports external fragmentation, internal fragmentation, failures and, for sla
 full/partial/empty slabs. It reads or writes CSV traces (`alloc,<id>,<FOOD|MED|HYGIENE>,<count>` and
 `free,<id>`). Experiment E5 is in `docs/EXPERIMENTS.md`.
 
+### Paging: perishables on a camp's shelves (pagesim)
+A camp's F shelf slots are page frames, the items it needs are the reference string, and a stock-out is a page fault:
+```sh
+build/pagesim --policy lru --frames 3 --refs 7,0,1,2,0,3,0,4,2,3,0,3,2,1,2,0,1,7,0,1 --verbose   # textbook table: 12 faults
+build/pagesim --policy fifo|lru|optimal|expiry --frames F (--refs LIST | --trace F | --seed S)
+```
+Expiry-first evicts the stock closest to its expiry date. Every run reports faults, the hit ratio and the units
+that expired on the shelf. Experiment E6 is in `docs/EXPERIMENTS.md`.
+
 ### Live dashboard: reliefui
 `scripts/reliefctl ui` (or `make ui`) opens an htop-like view that refreshes every 500 ms:
 - **top bar:** daemon pid, uptime, policy, deadlock mode, requests and requests/s;
@@ -280,7 +290,8 @@ run it every 10 minutes, add this with `crontab -e`:
 | 3 | Readers-writers (readers preference vs writer preference) | Inventory behind `rwsync` (semaphore or pthread rwlock); `build/rwlab`, experiment E4b | 3 |
 | 3 | Deadlock characterization (Coffman conditions), prevention (resource ordering, all-or-nothing), detection (wait-for graph + DFS) and recovery (preemption) | `reliefd --deadlock none/prevent/detect`, `scenarios/deadlock.csv`, `reliefctl waitfor` | 3 |
 | 4 | First/best/worst fit, buddy system, slab allocator; fragmentation | `build/memsim` (`src/mem/`): warehouse floor, pre-packed kits; experiment E5 | 4 |
-| 4 | FIFO/LRU/Optimal replacement, thrashing | Perishable stock (plus expiry-first) | 4 |
+| 4 | Demand paging, FIFO/LRU/Optimal replacement, Belady's anomaly | `build/pagesim`: a camp's shelves, perishables (plus expiry-first); experiment E6 | 4 |
+| 4 | Thrashing | (next step) | 4 |
 | 5 | FCFS/SSTF/SCAN/C-SCAN/LIFO disk scheduling | Delivery routing along one highway | 5 |
 | 5 | Journaling, directory tree, permissions | Write-ahead journal with fsync + crash recovery, per-role access | 5 |
 | 6 | User vs kernel space, system calls, boot services | `/proc/relief`, strace of a request, systemd unit, Termux client | 6 |
