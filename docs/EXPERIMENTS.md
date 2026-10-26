@@ -13,6 +13,7 @@ Every experiment is deterministic for a given `--seed` and writes CSV to `experi
 | E4b | Readers-writers problem (Unit 3) | Does the textbook readers-preference solution starve writers, and does a writer-preference rwlock fix it? | done |
 | E5 | Memory allocation and fragmentation (Unit 4) | How do first/best/worst fit, the buddy system and slab allocation compare on the same shipment trace? | done |
 | E6 | Virtual memory: page replacement (Unit 4) | How do FIFO, LRU, Optimal and expiry-first trade stock-outs (page faults) against expired stock as shelf space grows? | done |
+| E8 | Disk scheduling (Unit 5) | How far does a delivery truck drive under FCFS, SSTF, SCAN, C-SCAN and LIFO, and which stop is left waiting longest? | done |
 
 ## E1: triage scheduling comparison
 
@@ -630,6 +631,41 @@ expiry-first compare on stock-outs (page faults)? How much stock does each let e
 3. **Beyond the working set (about 8 frames), more shelf space buys nothing.** Faults level off at
    about 59, mostly first stockings and restocking expired stock rather than lack of space. Meanwhile more stock expires (up to 51):
    there, freshness, not space, is the limit.
+
+## E8: delivery routing on one highway, disk scheduling
+**Question:** A truck on one highway (km 0–199) is a disk head on cylinders 0–199, and its
+delivery stops are I/O requests. How far does it drive under FCFS, SSTF, SCAN, C-SCAN and LIFO,
+and which stop is left waiting longest?
+
+**Setup:** `make e8` (`experiments/run_e8.sh`) runs `build/routesim`:
+- **Stops:** 20 random stops and a random start per seed (seeds 1–5). Every policy gets the same stops.
+- **Convention:** SCAN and C-SCAN move up and go to the end of the highway (km 199). C-SCAN's empty
+  return jump to km 0 counts as distance.
+- **Measures:** total km, and the **worst detour**: the km driven before a stop is reached, minus its
+  direct distance from the start. All stops are known up front, so the plain worst wait is always the
+  whole route. The detour is what tells the policies apart.
+- **Unit test:** the textbook queue 98,183,37,122,14,124,65,67 from 53 gives FCFS 640, SSTF 236,
+  SCAN 331 and C-SCAN 382 (183 plus the 199 km jump). The arithmetic is in `tests/test_disk.c`.
+
+| Policy | Total km (mean) | of it the C-SCAN jump | Worst detour (mean, max) |
+|------|------:|------:|------:|
+| FCFS | 1497 | 0 | 1453 (1552) |
+| SSTF | **245** | 0 | **124** (324) |
+| SCAN | 289 | 0 | 191 (364) |
+| C-SCAN | 347 | 159 | 305 (390) |
+| LIFO | 1459 | 0 | 1378 (1466) |
+
+![Total km and worst detour](figures/e8/e8_routing.png)
+
+**Conclusion:**
+1. **The order given is the expensive part.** FCFS and LIFO zig-zag along the highway (about 1,500 km).
+   The seek-aware policies need a sixth of that.
+2. **SSTF drives the least, but it is not fair everywhere.** On average it has the smallest detour too.
+   From km 164 (seed 3), though, it serves the nearby cluster first and strands the far stops, with a
+   detour of 324 against SCAN's 70. SCAN's worst case depends only on the start and the direction, not
+   on where new stops appear, and that bound is why disks use it.
+3. **C-SCAN pays for uniform waits with the return trip.** 159 of its 347 km are the empty jump back.
+   Without the jump it drives less than SCAN (188 km on average).
 
 ## Baseline (Phase 2 step 2)
 `schedsim --teams 3` on `scenarios/flood_pune.csv` (200 requests in 360 min, permanently overloaded). The

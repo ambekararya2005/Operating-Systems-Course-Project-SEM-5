@@ -60,6 +60,7 @@ make e4              # experiment E4: every racelab mode x 10 runs -> experiment
                      #   plus strace futex counts in docs/strace_futex.txt (sudo apt install strace)
 make e5              # experiment E5: first/best/worst fit, buddy, slab on one shipment trace -> graph
 make e6              # experiment E6: page faults vs frames, FIFO/LRU/Optimal/expiry-first -> graph
+make e8              # experiment E8: delivery routing FCFS/SSTF/SCAN/C-SCAN/LIFO, 20 stops x 5 seeds -> graph
 make e4b             # experiment E4b: readers-writers writer starvation, rwlab semaphore vs rwlock
 make clean
 ```
@@ -182,6 +183,15 @@ build/pagesim --policy fifo|lru|optimal|expiry --frames F (--refs LIST | --trace
 Expiry-first evicts the stock closest to its expiry date. Every run reports faults, the hit ratio and the units
 that expired on the shelf. Experiment E6 is in `docs/EXPERIMENTS.md`.
 
+### Disk scheduling: delivery routing on one highway (routesim)
+A truck on one highway (km 0–199) is a disk head on cylinders 0–199, and its delivery stops are I/O requests:
+```sh
+build/routesim --policy cscan --start 53 --stops 98,183,37,122,14,124,65,67   # 382 km incl. the 199 km return jump
+build/routesim --policy fcfs|sstf|scan|cscan|lifo [--start KM --dir up|down] (--stops LIST | --seed S [--count N])
+```
+It prints the visiting order, the total km, the worst and average wait and the worst detour, plus an ASCII
+track diagram of the truck's path (`--quiet` leaves the diagram out). Experiment E8 is in `docs/EXPERIMENTS.md`.
+
 ### Live dashboard: reliefui
 `scripts/reliefctl ui` (or `make ui`) opens an htop-like view that refreshes every 500 ms:
 - **top bar:** daemon pid, uptime, policy, deadlock mode, requests and requests/s;
@@ -292,7 +302,7 @@ run it every 10 minutes, add this with `crontab -e`:
 | 4 | First/best/worst fit, buddy system, slab allocator; fragmentation | `build/memsim` (`src/mem/`): warehouse floor, pre-packed kits; experiment E5 | 4 |
 | 4 | Demand paging, FIFO/LRU/Optimal replacement, Belady's anomaly | `build/pagesim`: a camp's shelves, perishables (plus expiry-first); experiment E6 | 4 |
 | 4 | Thrashing | (next step) | 4 |
-| 5 | FCFS/SSTF/SCAN/C-SCAN/LIFO disk scheduling | Delivery routing along one highway | 5 |
+| 5 | FCFS/SSTF/SCAN/C-SCAN/LIFO disk scheduling | `build/routesim` (`src/io/`): delivery routing along one highway, ASCII track diagram; experiment E8 | 5 |
 | 5 | Journaling, directory tree, permissions | Write-ahead journal with fsync + crash recovery, per-role access | 5 |
 | 6 | User vs kernel space, system calls, boot services | `/proc/relief`, strace of a request, systemd unit, Termux client | 6 |
 
