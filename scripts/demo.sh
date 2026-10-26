@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # OS concept: Shell programming — a guided demo of ReliefOS, one syllabus topic per step (Unit 1)
 #
-# demo.sh: walks through what ReliefOS shows so far (Phases 1-5), pausing after each step.
-#   usage: demo.sh [-y] [-u]
-#     -y  do not pause between steps (run straight through)
+# demo.sh: walks through what ReliefOS shows (Phases 1-6), pausing after each step.
+#   usage: demo.sh [-y|--auto] [-u]
+#     -y, --auto  do not pause between steps (run straight through)
 #     -u  include the live dashboard step (reliefctl ui): watch it, press q to continue
 #   env: RELIEF_HOME (default <repo>/run/demo), RELIEF_TIME_SCALE (default 50)
 #
@@ -20,6 +20,8 @@
 #      and LRU page replacement on the textbook reference string (pagesim --verbose)  (Unit 4)
 #   9. disk scheduling: the truck's route under SSTF and C-SCAN (routesim track diagrams);
 #      the journal: kill -9 of reliefd, restart, event=recovered                    (Unit 5)
+#  10. boot and syscalls: systemctl status reliefd (if installed), then 10 key lines of a
+#      request's strace with what made each one (docs/SYSCALLS.md)                  (Unit 6)
 # Exit status: 0 done, 1 a step failed, 2 usage error.
 set -euo pipefail
 
@@ -31,6 +33,12 @@ export RELIEF_TIME_SCALE=${RELIEF_TIME_SCALE:-50}
 
 pause=1
 ui=0
+args=()
+for a in "$@"; do                   # long option for getopts
+    [[ $a == --auto ]] && a=-y
+    args+=("$a")
+done
+set -- "${args[@]+"${args[@]}"}"
 while getopts ":yuh" opt; do
     case "$opt" in
         y) pause=0 ;;
@@ -140,6 +148,21 @@ sleep 1
 echo "the restarted reliefd replayed snapshot.bin + journal.log:"
 grep ' event=recovered ' "$RELIEF_HOME/logs/reliefd.log" | tail -1 | sed 's/^ts=[^ ]* //'
 "$CTL" stop
+next
+
+step "10. Boot and system calls: reliefd as a systemd service, one request under strace (Unit 6)"
+if systemctl cat reliefd.service > /dev/null 2>&1; then
+    systemctl --no-pager status reliefd 2>&1 | head -n 8 || true
+else
+    echo "reliefd.service is not installed (scripts/install_service.sh installs it): skipped."
+fi
+echo
+echo "10 key system calls of one request (scripts/trace_request.sh; full table in docs/SYSCALLS.md):"
+awk -F' \\| ' -v want=" 2 4 5 7 8 9 10 11 13 14 " '/^\| [0-9]+ \|/ && index(want, " " substr($1, 3) " ") {
+        line = $2; why = $3
+        gsub(/\\\|/, "|", line); gsub(/`/, "", line); gsub(/`/, "", why); sub(/ \|$/, "", why)
+        sub(/^[0-9]+ \.[0-9]+ /, "", line)
+        printf "%2d. %s\n      %s\n", ++n, substr(line, 1, 92), why }' "$ROOT/docs/SYSCALLS.md"
 
 echo
 echo "Demo done. Logs: $RELIEF_HOME/logs/reliefd.log (awk-friendly key=value)."

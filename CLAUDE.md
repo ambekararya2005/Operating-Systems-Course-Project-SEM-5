@@ -116,5 +116,5 @@ Layout (folders marked * are created in later phases):
 Work the phases in order. Within a phase, ship all P0 features before any P1/P2.
 
 ## Current status
-Phase 2 complete (gate M2). Phase 3 complete (gate M3). Phase 4 complete (gate M4: `memsim` E5, `pagesim` E6). Phase 5 complete (gate M5: `routesim` E8, write-ahead journal + crash recovery E9). Phase 6: step 1 done (systemd unit, strace, KERNEL.md).
+Phase 6 complete – project done. All gates M1–M6 passed (tests, TSan, Valgrind); relief.ko, Android client, thrashing demo, role directory tree: not built (README).
 Update this line as steps complete.

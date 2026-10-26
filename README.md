@@ -1,8 +1,14 @@
 # ReliefOS: Linux-Based Smart Disaster Relief Resource Management
 
-Operating Systems course project (Semester 5). ReliefOS models a disaster-relief network as an
-operating system. Every feature demonstrates a named syllabus topic, so the project is also a
-working demo of the OS syllabus.
+ReliefOS is an Operating Systems course project (Semester 5) that runs a disaster-relief network
+as if it were an operating system, in C11 on Linux. A coordinator daemon (`reliefd`) fork/execs
+one process per relief camp. The camps send rescue and supply requests over a POSIX message queue.
+Inside reliefd, rescue requests are scheduled onto team threads (FCFS … MLFQ). Supplies move
+through a producer-consumer loading dock, vehicles and kit crates are granted with the Banker's
+algorithm, and every allocation is journaled with fsync so a crash loses nothing. Standalone
+simulators cover memory allocation, page replacement and disk scheduling, and reliefd also runs as
+a systemd service. Every feature demonstrates a named syllabus topic (Units 1–6). Nine experiments
+(E1–E9) measure the trade-offs with reproducible CSVs and plots.
 
 | Relief world    | OS concept       |
 |-----------------|------------------|
@@ -10,32 +16,70 @@ working demo of the OS syllabus.
 | Supplies        | Memory           |
 | Trucks / boats  | Shared devices   |
 | Rescue requests | Jobs to schedule |
+| Highway stops   | Disk requests    |
 
-**Status:** Phase 1 (foundation) complete. `reliefd` is the parent of all camp processes. It
-fork/execs one camp per line of `scenarios/camps.conf`, reaps them on SIGCHLD, restarts crashed
-camps, and shuts them all down cleanly. Camps send their scenario requests over a POSIX message
-queue, each at its arrival time on a simulated clock (1 simulated minute = 100 ms by default).
-Phase 2 adds a triage scheduler: RESCUE requests are scheduled live onto rescue-team threads inside
-reliefd (`--policy`, `--teams`), and `schedsim` replays scenarios offline.
-
-## Components
-- `reliefd`: the coordinator daemon (C11, pthreads)
-- `camp`: one process per relief camp, started by reliefd. It sends requests to reliefd over `/reliefos_requests`
-- `reliefctl`: Bash CLI
-- `reliefui`: live ncurses dashboard, like htop (`make ui` or `scripts/reliefctl ui`)
-- `web/`: local web dashboard (`scripts/reliefctl web`, then open http://127.0.0.1:8080/): Python standard library
-  only, no CDN, works offline
-- `scripts/demo.sh`: a guided demo of Phases 1-3, one syllabus topic per step (`-u` adds the dashboard)
-- `relief.ko`: kernel module exposing `/proc/relief` (Phase 6)
-- `systemd/reliefd.service`: systemd unit template (Phase 6)
-
-## Prerequisites
-Ubuntu 24.04 (WSL2 works):
+## Quick start
+Ubuntu 24.04 (WSL2 works). Nothing needs root.
 ```sh
-sudo apt install build-essential valgrind shellcheck libncurses-dev   # ncurses: the reliefui dashboard
+sudo apt install build-essential valgrind shellcheck libncurses-dev strace python3-matplotlib
+make                                         # all binaries into build/ (-Wall -Wextra -Werror)
+scripts/reliefctl simulate flood --camps 8 --seed 42   # run a generated flood scenario to the end, then a report
+scripts/reliefctl start; scripts/reliefctl ui           # the live system and its ncurses dashboard (q quits)
+scripts/reliefctl stop
+scripts/demo.sh                              # guided tour, one syllabus topic per step (--auto: no pauses, -u: dashboard)
+make test                                    # all tests (make tsan / make valgrind: the same under the sanitizers)
 ```
 
-## Build, run, test
+## Syllabus coverage
+| Unit | Topic | File / command | Experiment |
+|------|-------|----------------|------------|
+| 1 | Shell programming (functions, getopts, awk), cron | `scripts/reliefctl`, `scripts/stockcheck.sh`, `scripts/demo.sh` | – |
+| 1 | Modular kernels | `docs/KERNEL.md` (`/proc/relief` module, design only) | – |
+| 2 | fork/exec/waitpid, process states, PCB via `/proc`, signals | `src/reliefd/camps.c`, `reliefctl ps / tree / alert / dump` | – |
+| 2 | IPC: POSIX message queue, shared memory | `include/relief.h`, `src/common/shm.c`, `build/reliefstat` | – |
+| 2 | Threads (pthreads), mutex + condition variable | `src/reliefd/dispatch.c` (rescue teams + clock thread) | – |
+| 2 | FCFS, SJF, SRTF, RR, Priority, MLFQ with aging | `src/sched/`, `build/schedsim`, `reliefd --policy` | E1, E1b |
+| 2 | Linux scheduling: nice, SCHED_FIFO, SCHED_RR, CFS/EEVDF | `build/linuxsched` | E2 |
+| 3 | Critical section, Peterson, TAS, mutex, semaphore, futex | `build/racelab` | E4 |
+| 3 | Producer-consumer (bounded buffer, 3 semaphores) | `src/reliefd/dock.c` | – |
+| 3 | Readers-writers | `src/reliefd/inventory.c`, `build/rwlab` | E4b |
+| 3 | Deadlock: Banker's avoidance, prevention, wait-for-graph detection + recovery | `src/deadlock/`, `src/reliefd/resmgr.c`, `reliefd --deadlock`, `reliefctl banker / waitfor`, `build/dlsim` | E3 |
+| 4 | First/best/worst fit, buddy system, slab allocator, fragmentation | `src/mem/`, `build/memsim` | E5 |
+| 4 | Page replacement: FIFO, LRU, Optimal (+ expiry-first), Belady's anomaly | `src/mem/paging.c`, `build/pagesim` | E6 |
+| 5 | Disk scheduling: FCFS, SSTF, SCAN, C-SCAN, LIFO | `src/io/disk.c`, `build/routesim` | E8 |
+| 5 | File-system implementation: write-ahead journal, fsync, atomic rename, crash recovery | `src/io/journal.c`, `reliefd --no-journal`, `tests/crash_test.sh` | E9 |
+| 6 | Boot process, systemd service | `systemd/reliefd.service`, `scripts/install_service.sh` | – |
+| 6 | System call interface, user vs kernel space | `scripts/trace_request.sh`, `docs/SYSCALLS.md`, `docs/KERNEL.md` | – |
+
+## Experiments
+Details, tables and figures are in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md). Run them with `make e1` … `make e9`.
+
+| | Question | Key finding |
+|---|---|---|
+| E1 | Which triage policy serves CRITICAL fastest without starving the rest? | Priority protects CRITICAL (9–14 min wait). MLFQ with aging does not: aging floods Q0 during the rush (25.6 min, the most starvation). |
+| E1b | When does MLFQ stop reaching zero starvation? | Only up to 30% offered load. From 45% it starves, and above 60% worse than preemptive priority. |
+| E2 | How does real Linux (EEVDF + nice, SCHED_FIFO, SCHED_RR) treat the same workload? | FIFO is strict priority (best for CRITICAL, starves the rest). The fair class with nice is proportional share: nobody starves, but CRITICAL still waits about two hours. |
+| E3 | What does each way of handling deadlock cost? | Doing nothing freezes the fleet. Prevention gives the best throughput (it idles 19–22% of capacity). Avoidance delays requests. Detection wastes work on 572 preemptions. |
+| E4 | Which entry/exit sections keep a shared counter correct? | No lock loses about 45% of updates. Textbook Peterson fails on x86 without a fence. The mutex, the spinlock and the semaphore are exact, and the mutex enters the kernel only when contended. |
+| E4b | Does readers-preference starve writers? | The semaphore version starves the writer completely (0 writes). The writer-preference rwlock fixes it. |
+| E5 | How much space does each allocator waste? | The fits shatter free space (external fragmentation). Buddy wastes 22% inside blocks. Slab fails least (3.8%). |
+| E6 | How do FIFO, LRU, Optimal and expiry-first trade stock-outs against expired stock? | Optimal has the fewest faults but lets the most stock expire. Expiry-first has almost no waste while shelves are scarce. |
+| E8 | How far does the truck drive under each disk-scheduling policy? | SSTF 245 km vs FCFS 1,497 on 20 stops. SSTF can still strand far stops (detour 324 vs SCAN's 70). |
+| E9 | What does the journal buy and cost? | 10 kill -9 crashes lose 0 units with the journal and all 232 without it, for about 2.3 ms of fsync per grant. |
+
+## Not implemented / future work
+- **Kernel module `relief.ko` (`/proc/relief`):** design and a code sketch only (`docs/KERNEL.md`).
+  WSL2's kernel ships no matching headers, so building it needs a VM or a self-built kernel.
+- **Android client:** design only (`docs/KERNEL.md`: where it would sit on the Android stack, and the HTTPS gateway).
+- **Thrashing demo (Unit 4):** `pagesim` shows faults vs frames but has no multi-process load where
+  CPU utilisation collapses as the degree of multiprogramming grows.
+- **Paging hardware and segmentation:** page tables, the TLB, address translation and segments are not
+  simulated. `pagesim` models only the replacement policy.
+- **Directory tree with permissions per role (Unit 5):** the `relief-admin` / `relief-officer` /
+  `relief-volunteer` groups are not enforced. Only the systemd service runs with group `relief-admin`.
+
+## Usage reference
+### All make targets
 ```sh
 make                 # builds build/reliefd and build/camp
 make test            # tests/sched.sh (textbook FCFS/SJF/SRTF/RR/prio/MLFQ unit tests, all policies),
@@ -48,7 +92,9 @@ make test            # tests/sched.sh (textbook FCFS/SJF/SRTF/RR/prio/MLFQ unit 
                      # tests/racelab.sh (critical section: Peterson, mutex, spinlock, semaphore),
                      # tests/sync.sh (bounded buffer, readers-writers, rwlab), tests/dock.sh (loading dock),
                      # tests/banker.sh (Banker's algorithm: textbook example, live grants/releases),
-                     # tests/deadlock.sh (deadlock.csv under none/prevent/avoid/detect, waitfor)
+                     # tests/deadlock.sh (deadlock.csv under none/prevent/avoid/detect, waitfor),
+                     # tests/mem.sh, tests/page.sh, tests/route.sh (simulators vs textbook values),
+                     # tests/crash_test.sh (kill -9 x 10: the journal loses nothing), and more
 make ui              # live ncurses dashboard (build/reliefui); s starts ReliefOS from inside it
 make tsan            # ThreadSanitizer build (build/tsan/) + tests
 make valgrind        # tests under valgrind (camps too)
@@ -66,6 +112,7 @@ make e4b             # experiment E4b: readers-writers writer starvation, rwlab 
 make clean
 ```
 
+### Running the system by hand
 One command, end to end (generate a scenario, run it until every camp sends BYE, report):
 ```sh
 scripts/reliefctl simulate flood --camps 8 --seed 42
@@ -305,36 +352,12 @@ run it every 10 minutes, add this with `crontab -e`:
 */10 * * * * RELIEF_HOME=$HOME/os-course-project-sem5/run $HOME/os-course-project-sem5/scripts/stockcheck.sh -t 50 -w 10 -q
 ```
 
-## Syllabus mapping
-| Unit | Topics | ReliefOS feature | Phase |
-|------|--------|------------------|-------|
-| 1 | Shell programming, modular kernels | `reliefctl` (functions, getopts, awk report), `stockcheck.sh` cron job; `relief.ko` | 1, 6 |
-| 2 | fork/exec/waitpid, process states/PCB, pthreads | reliefd supervises camp processes (SIGCHLD reaping, restarts); `reliefctl ps`/`tree` read the PCB via `/proc` | 1 |
-| 2 | IPC (POSIX message queues) | Camps send paced requests over a bounded queue; mq_timedsend back-pressure | 1 |
-| 2, 3 | IPC via POSIX shared memory, process-shared mutex | Live status table `/reliefos_status` read by `reliefstat` (robust mutex + seqlock) | 1 |
-| 2 | Signals as IPC, process control | `reliefctl alert` (SIGUSR1), `dump` (SIGUSR2), graceful SIGTERM; flag-only handlers | 1 |
-| 2 | FCFS, SJF, RR, Priority, MLFQ with aging | Triage scheduler (`src/sched/`, pluggable policies, `schedsim`), experiment E1 | 2 |
-| 2 | Traditional/modern UNIX scheduling: nice, SCHED_FIFO/SCHED_RR, CFS/EEVDF | `build/linuxsched`: real threads on one pinned CPU, experiment E2 | 2 |
-| 2, 3 | Threads (pthreads), mutex + condition variable | reliefd's rescue-team threads and clock thread share one ready queue (`src/reliefd/dispatch.c`) | 2 |
-| 3 | Critical section, Peterson's solution, mutex, TAS spinlock, semaphores, futex | `build/racelab`: two camps / one boat / one counter, experiment E4, strace of futex | 3 |
-| 3 | Producer-consumer (bounded buffer, empty/full/mutex semaphores) | reliefd loading dock: warehouse producer threads → dock → truck threads (`src/reliefd/dock.c`) | 3 |
-| 3 | Deadlock avoidance: Banker's algorithm (safety + resource-request) | Trucks, boats and kit crates granted only in safe states; `reliefctl banker` (`src/deadlock/`, `src/reliefd/resmgr.c`) | 3 |
-| 3 | Readers-writers (readers preference vs writer preference) | Inventory behind `rwsync` (semaphore or pthread rwlock); `build/rwlab`, experiment E4b | 3 |
-| 3 | Deadlock characterization (Coffman conditions), prevention (resource ordering, all-or-nothing), detection (wait-for graph + DFS) and recovery (preemption) | `reliefd --deadlock none/prevent/detect`, `scenarios/deadlock.csv`, `reliefctl waitfor` | 3 |
-| 4 | First/best/worst fit, buddy system, slab allocator; fragmentation | `build/memsim` (`src/mem/`): warehouse floor, pre-packed kits; experiment E5 | 4 |
-| 4 | Demand paging, FIFO/LRU/Optimal replacement, Belady's anomaly | `build/pagesim`: a camp's shelves, perishables (plus expiry-first); experiment E6 | 4 |
-| 4 | Thrashing | (next step) | 4 |
-| 5 | FCFS/SSTF/SCAN/C-SCAN/LIFO disk scheduling | `build/routesim` (`src/io/`): delivery routing along one highway, ASCII track diagram; experiment E8 | 5 |
-| 5 | Journaling, crash recovery | Write-ahead journal of the Banker's allocations: fsync, snapshot by atomic rename, replay (`src/io/journal.c`); experiment E9 | 5 |
-| 5 | Directory tree, permissions | Per-role access (next step) | 5 |
-| 6 | User vs kernel space, system calls, boot services | `systemd/reliefd.service` + `scripts/install_service.sh`; `scripts/trace_request.sh` → `docs/SYSCALLS.md`; `docs/KERNEL.md` (`/proc` reads, signals; `/proc/relief` module and Android client as design only) | 6 |
-
-Roles (`relief-admin`, `relief-officer`, `relief-volunteer`) are enforced as Linux groups.
-
 ## Repository layout
-See [CLAUDE.md](CLAUDE.md) for the layout and conventions. Design notes are in [docs/](docs/).
+See [CLAUDE.md](CLAUDE.md) for the layout and conventions. Design notes are in [docs/](docs/):
+ARCHITECTURE.md, EXPERIMENTS.md, SYSCALLS.md and KERNEL.md.
 
 ## Team
 | Name | Roll no. | Responsibilities |
 |------|----------|------------------|
+| _TBD_ | | |
 | _TBD_ | | |
