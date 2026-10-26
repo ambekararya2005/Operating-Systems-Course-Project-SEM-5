@@ -16,6 +16,8 @@
 #   6. awk report of the run, then stop                                         (Unit 1)
 #   7. deadlock: deadlock.csv under --deadlock none (a real circular wait, shown with
 #      reliefctl waitfor), then under --deadlock detect (found and broken)         (Unit 3)
+#   8. memory: the warehouse floor under the buddy system and slab caches (memsim --show),
+#      and LRU page replacement on the textbook reference string (pagesim --verbose)  (Unit 4)
 # Exit status: 0 done, 1 a step failed, 2 usage error.
 set -euo pipefail
 
@@ -104,6 +106,17 @@ echo "--deadlock detect: the detector found the cycle and preempted a truck:"
 grep -E ' event=(deadlock_detected|recovery) ' "$RELIEF_HOME/logs/reliefd.log" | tail -2 | sed 's/^ts=[^ ]* //'
 "$CTL" stop
 rm -f "$conf"
+next
+
+step "8. Memory: the warehouse floor (1024 units) as memory, a camp's shelves as page frames (Unit 4)"
+echo "Buddy system: each shipment gets a power-of-two block; '~' is space wasted inside a block:"
+"$ROOT/build/memsim" --alloc buddy --seed 1 --ops 60 --show 30 --width 96 | grep -A1 '^after'
+echo
+echo "Slab caches: F/M/H are FOOD/MED/HYGIENE kits in their own slabs, '_' a free slot:"
+"$ROOT/build/memsim" --alloc slab --seed 1 --ops 60 --show 60 --width 96 | grep -A1 '^after'
+echo
+echo "LRU on the textbook reference string with 3 shelf slots (frames):"
+"$ROOT/build/pagesim" --policy lru --frames 3 --refs 7,0,1,2,0,3,0,4,2,3,0,3,2,1,2,0,1,7,0,1 --verbose
 
 echo
 echo "Demo done. Logs: $RELIEF_HOME/logs/reliefd.log (awk-friendly key=value)."

@@ -116,5 +116,5 @@ Layout (folders marked * are created in later phases):
 Work the phases in order. Within a phase, ship all P0 features before any P1/P2.
 
 ## Current status
-Phase 2 complete (gate M2). Phase 3 complete (gate M3). Phase 4: steps 1-2 done (`memsim`: fits, buddy, slab, E5; `pagesim`: FIFO/LRU/OPT/expiry, E6).
+Phase 2 complete (gate M2). Phase 3 complete (gate M3). Phase 4 complete (gate M4: `memsim` E5, `pagesim` E6). Next: Phase 5.
 Update this line as steps complete.

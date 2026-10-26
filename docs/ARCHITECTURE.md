@@ -612,6 +612,24 @@ always run on the main thread, where no lock is held at that point. A camp is si
 own log lock (level 4 → 5, a recovery warning). It never waits for reliefd while holding them. The robust mutex
 (`EOWNERDEAD`) means a camp that dies holding it cannot block reliefd.
 
+## Phase 4: memory management (`src/mem/`)
+Two standalone simulators; reliefd is unchanged. Each one's algorithms sit behind a function-pointer
+table: `mem_ops_t` in `mem.h`, `page_policy_t` in `paging.h`.
+
+| Relief world | Memory concept | Where |
+|--------------|----------------|-------|
+| Warehouse floor (1024 units) | Physical memory | `memsim --size` |
+| Shipment arriving / leaving | Process allocating / freeing memory | `memsim` trace: `alloc` / `free` |
+| Free floor between shipments | Holes in the free list | `fit.c` (first / best / worst fit) |
+| Power-of-two floor block | Buddy block | `buddy.c` |
+| Kit cache (FOOD, MED, HYGIENE) | Slab cache of fixed-size objects | `slab.c` (16-unit slabs, full/partial/empty lists) |
+| Camp shelf slot | Page frame | `pagesim --frames` |
+| Item the camp needs | Page reference | `pagesim --refs / --trace / --seed` |
+| Stock-out | Page fault | `paging.c` (FIFO, LRU, Optimal, expiry-first) |
+| Stock expiring on the shelf | (no OS analogue: perishables) | expiry-first policy, `expired` count |
+
+Results: E5 (fragmentation and failures) and E6 (faults vs frames) in `docs/EXPERIMENTS.md`.
+
 ## Structured log (`$RELIEF_HOME/logs/reliefd.log`)
 One event per line: `ts=<iso8601> level=<lvl> comp=reliefd pid=<pid> event=<name> key=value ...`.
 Values contain no spaces, except `msg="..."` on free-form `event=log` lines. Events include
