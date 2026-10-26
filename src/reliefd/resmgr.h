@@ -20,6 +20,12 @@
  *     Recovery: the camp in the cycle whose waiting request has the lowest severity loses a
  *     vehicle another cycle member waits for; that grant is rolled back and its request queued
  *     again (event=recovery, MSG_REVOKE to the camp).
+ *   - Write-ahead journal (src/io/journal.c, Unit 5): every CLAIM, GRANT, RELEASE (also a
+ *     revoke) and RELEASE_ALL is appended to $RELIEF_HOME/journal.log and fsync'ed before it is
+ *     applied and acknowledged (the camp is told; the log line carries seq=). For a grant the
+ *     Banker's check allocates tentatively; it is rolled back if the record cannot be made
+ *     durable. On startup the snapshot and journal are replayed (event=recovered). Off with
+ *     reliefd --no-journal.
  * All state is guarded by one mutex; the main thread only enqueues and releases.
  */
 #ifndef RELIEFD_RESMGR_H
@@ -40,9 +46,10 @@ typedef struct {
      * to the loading dock from here). May be NULL. */
     void         (*on_grant)(void *ctx, const relief_request_t *req);
     void          *grant_ctx;
+    const char    *journal_dir;     /* journal.log + snapshot.bin go here; NULL = no journal */
 } resmgr_config_t;
 
-/* NULL on error (logged): unknown mode, no memory. */
+/* NULL on error (logged): unknown mode, no memory, a journal that cannot be recovered. */
 resmgr_t *resmgr_start(const resmgr_config_t *cfg);
 
 /* HELLO: (re)declare the camp's maximum claim, open its reply queue if it has one. */

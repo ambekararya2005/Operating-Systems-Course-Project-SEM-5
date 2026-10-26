@@ -12,6 +12,8 @@
  *     the inventory (inventory.c, readers-writers)
  *   - decides vehicle and kit requests with the deadlock policy (resmgr.c, --deadlock avoid:
  *     the Banker's algorithm); camps release vehicles/crates with MSG_RELEASE after use
+ *   - journals every Banker's claim/grant/release ahead of applying it and replays the journal on
+ *     startup (src/io/journal.c via resmgr.c; --no-journal turns it off)
  * Allocators etc. arrive in later phases.
  */
 #include "camps.h"
@@ -278,7 +280,7 @@ static void usage(const char *prog)
             "usage: %s [--camps FILE] [--scenario FILE] [--seed N] [--time-scale MS] [--exit-when-done]\n"
             "          [--policy NAME] [--teams N] [--quantum Q] [--age MIN] [--preemptive on|off]\n"
             "          [--dock N] [--producers P] [--trucks C] [--rw semaphore|rwlock]\n"
-            "          [--deadlock avoid|none|prevent|detect] [--resources FILE] [--camp-bin PATH]\n"
+            "          [--deadlock avoid|none|prevent|detect] [--resources FILE] [--camp-bin PATH] [--no-journal]\n"
             "  --camps     camps config, one \"<id> <name>\" per line (default %s)\n"
             "  --scenario  scenario CSV passed to every camp (default %s)\n"
             "  --seed      seed passed to every camp (default 1)\n"
@@ -301,7 +303,9 @@ static void usage(const char *prog)
             "              (breaks hold-and-wait instead of circular wait)\n"
             "  --detect-interval S  with --deadlock detect: seconds between detector runs (default 1)\n"
             "  --resources Banker's resource totals (default %s)\n"
-            "  --camp-bin  camp executable (default: camp next to reliefd)\n",
+            "  --camp-bin  camp executable (default: camp next to reliefd)\n"
+            "  --no-journal  do not journal Banker's allocations ($RELIEF_HOME/journal.log, fsync'ed\n"
+            "              before each grant/release) nor recover them on startup\n",
             prog, DEFAULT_CAMPS_CONF, DEFAULT_SCENARIO, DEFAULT_TIME_SCALE, DEFAULT_POLICY,
             RELIEF_SHM_TEAMS, DEFAULT_TEAMS, DEFAULT_QUANTUM, DEFAULT_AGE, DOCK_MAX_CAPACITY,
             DEFAULT_DOCK, DOCK_MAX_PRODUCERS, DEFAULT_PRODUCERS, DOCK_MAX_TRUCKS, DEFAULT_TRUCKS,
@@ -330,6 +334,7 @@ int main(int argc, char **argv)
         { "all-or-nothing", no_argument, NULL, 'A' },
         { "detect-interval", required_argument, NULL, 'I' },
         { "resources", required_argument, NULL, 'R' },
+        { "no-journal", no_argument,     NULL, 'J' },
         { "help",     no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
@@ -340,8 +345,8 @@ int main(int argc, char **argv)
     const char *home = getenv("RELIEF_HOME");
     char pidpath[CAMPS_PATH_MAX], logdir[CAMPS_PATH_MAX], logpath[CAMPS_PATH_MAX];
     stats_t st = { { 0 }, NULL, NULL, NULL, NULL };
-    resmgr_config_t rcfg = { DEFAULT_DEADLOCK, RELIEF_BANKER_DEFAULT_TOTALS, 0, 1000, on_grant, &st };
-    int all_or_nothing = 0;
+    resmgr_config_t rcfg = { DEFAULT_DEADLOCK, RELIEF_BANKER_DEFAULT_TOTALS, 0, 1000, on_grant, &st, NULL };
+    int all_or_nothing = 0, no_journal = 0;
     const char *resources = RELIEF_RESOURCES_CONF;
     char rerr[CAMPS_PATH_MAX + 128] = "";
     dock_config_t kcfg = { DEFAULT_DOCK, DEFAULT_PRODUCERS, DEFAULT_TRUCKS, 0, NULL };
@@ -357,7 +362,7 @@ int main(int argc, char **argv)
     camps.seed = 1;
     camps.time_scale_ms = DEFAULT_TIME_SCALE;
 
-    while ((opt = getopt_long(argc, argv, "c:s:S:t:xp:n:q:a:e:b:D:P:C:w:L:R:AI:h", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:s:S:t:xp:n:q:a:e:b:D:P:C:w:L:R:AI:Jh", opts, NULL)) != -1) {
         char *end;
         switch (opt) {
         case 'c': camps_conf = optarg; break;
@@ -441,6 +446,7 @@ int main(int argc, char **argv)
             break;
         }
         case 'A': all_or_nothing = 1; break;
+        case 'J': no_journal = 1; break;
         case 'I': {
             double secs;
             errno = 0;
@@ -472,6 +478,7 @@ int main(int argc, char **argv)
 
     if (!home || !*home)
         home = RELIEF_HOME_DEFAULT;
+    rcfg.journal_dir = no_journal ? NULL : home;
     if ((size_t)snprintf(pidpath, sizeof pidpath, "%s/%s", home, RELIEF_PID_FILE) >= sizeof pidpath ||
         (size_t)snprintf(camps.pids_path, sizeof camps.pids_path, "%s/%s", home,
                          RELIEF_CAMPS_PIDS) >= sizeof camps.pids_path ||

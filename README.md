@@ -61,6 +61,7 @@ make e4              # experiment E4: every racelab mode x 10 runs -> experiment
 make e5              # experiment E5: first/best/worst fit, buddy, slab on one shipment trace -> graph
 make e6              # experiment E6: page faults vs frames, FIFO/LRU/Optimal/expiry-first -> graph
 make e8              # experiment E8: delivery routing FCFS/SSTF/SCAN/C-SCAN/LIFO, 20 stops x 5 seeds -> graph
+make e9              # experiment E9: journal on/off, kill -9 x 10 (allocations lost) and fsync cost per grant
 make e4b             # experiment E4b: readers-writers writer starvation, rwlab semaphore vs rwlock
 make clean
 ```
@@ -192,6 +193,14 @@ build/routesim --policy fcfs|sstf|scan|cscan|lifo [--start KM --dir up|down] (--
 It prints the visiting order, the total km, the worst and average wait and the worst detour, plus an ASCII
 track diagram of the truck's path (`--quiet` leaves the diagram out). Experiment E8 is in `docs/EXPERIMENTS.md`.
 
+### Journaling: the Banker's allocations survive a crash
+reliefd appends every claim, grant and release to `$RELIEF_HOME/journal.log` (40-byte records with
+a CRC32, `write()` + `fsync()`) before it tells the camp. Every 100 records it writes `snapshot.bin`
+(temp file, fsync, atomic `rename()`) and truncates the journal. On startup it replays them and logs
+`event=recovered records=N ... alloc=camp:units/...`. `reliefd --no-journal` turns this off.
+`tests/crash_test.sh` kills reliefd with `kill -9` 10 times and checks that nothing acknowledged is
+lost. Experiment E9 is in `docs/EXPERIMENTS.md`.
+
 ### Live dashboard: reliefui
 `scripts/reliefctl ui` (or `make ui`) opens an htop-like view that refreshes every 500 ms:
 - **top bar:** daemon pid, uptime, policy, deadlock mode, requests and requests/s;
@@ -303,7 +312,8 @@ run it every 10 minutes, add this with `crontab -e`:
 | 4 | Demand paging, FIFO/LRU/Optimal replacement, Belady's anomaly | `build/pagesim`: a camp's shelves, perishables (plus expiry-first); experiment E6 | 4 |
 | 4 | Thrashing | (next step) | 4 |
 | 5 | FCFS/SSTF/SCAN/C-SCAN/LIFO disk scheduling | `build/routesim` (`src/io/`): delivery routing along one highway, ASCII track diagram; experiment E8 | 5 |
-| 5 | Journaling, directory tree, permissions | Write-ahead journal with fsync + crash recovery, per-role access | 5 |
+| 5 | Journaling, crash recovery | Write-ahead journal of the Banker's allocations: fsync, snapshot by atomic rename, replay (`src/io/journal.c`); experiment E9 | 5 |
+| 5 | Directory tree, permissions | Per-role access (next step) | 5 |
 | 6 | User vs kernel space, system calls, boot services | `/proc/relief`, strace of a request, systemd unit, Termux client | 6 |
 
 Roles (`relief-admin`, `relief-officer`, `relief-volunteer`) are enforced as Linux groups.

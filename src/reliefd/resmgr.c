@@ -6,6 +6,7 @@
 
 #include "../deadlock/deadlock.h"   /* src/deadlock is not on the include path */
 #include "../deadlock/waitfor.h"
+#include "../io/journal.h"          /* src/io is not on the include path */
 #include "log.h"
 #include "shm.h"
 
@@ -23,6 +24,8 @@
 #define NRES            RELIEF_BANKER_RES
 #define REPLY_TRIES     5           /* x REPLY_WAIT_MS before a reply counts as undeliverable */
 #define REPLY_WAIT_MS   100
+
+_Static_assert(JR_NRES == NRES && JR_MAX_CAMPS == NSLOTS, "journal records match the Banker's tables");
 
 /* A request waiting in reliefd, or a grant a camp holds. */
 typedef struct item {
@@ -60,6 +63,7 @@ struct resmgr {
     int64_t         scale_ns;
     long            detect_ms;
 
+    journal_t      *jr;             /* NULL = --no-journal */
     void          (*on_grant)(void *ctx, const relief_request_t *req);
     void           *grant_ctx;
     pthread_t       thread, detector;
@@ -147,6 +151,24 @@ static void list_unlink(list_t *l, item_t *prev, item_t *it)
     l->n--;
 }
 
+/* Write-ahead: make a change durable before it is applied. Caller holds the lock.
+ * 0 (*seq = its journal seq, 0 without a journal) or -1 (logged). */
+static int journal_locked(resmgr_t *rm, jr_type_t type, uint32_t camp, uint32_t id, const int *v,
+                          unsigned long long *seq)
+{
+    uint64_t s = 0;
+
+    *seq = 0;
+    if (!rm->jr)
+        return 0;
+    if (journal_append(rm->jr, type, camp, id, v, &s) == -1) {
+        EV_ERROR("journal_failed", "type=%d camp=%u id=%u errno=%d", (int)type, camp, id, errno);
+        return -1;
+    }
+    *seq = s;
+    return 0;
+}
+
 /* Send one reply to camp slot p. Caller holds the lock. Returns 0, or -1 if undeliverable. */
 static int reply_locked(resmgr_t *rm, int p, relief_msg_kind_t kind, const relief_request_t *req,
                         uint8_t flags)
@@ -197,20 +219,34 @@ static void retry_waiting_locked(resmgr_t *rm)
                     held[j] += g->vec[j];
         banker_result_t res = rm->policy->request(&rm->bk, p->slot, p->vec, held, seq, &len);
         if (res == BANKER_GRANT) {
-            if (reply_locked(rm, p->slot, MSG_GRANT, r, r->flags & REQ_FLAG_BUNDLE) == -1) {
-                /* The camp could not be told, so it would never release: undo the grant
-                 * and leave the request waiting. */
+            /* The Banker's check allocated tentatively. The grant is durable before the camp
+             * hears of it; if it cannot be, roll it back and leave the request waiting. */
+            unsigned long long jseq, useq;
+            int64_t t0 = mono_ns();
+            if (journal_locked(rm, JR_GRANT, r->camp_id, r->id, p->vec, &jseq) == -1) {
                 banker_release(&rm->bk, p->slot, p->vec);
                 prev = p;
                 p = next;
                 continue;
             }
+            if (reply_locked(rm, p->slot, MSG_GRANT, r, r->flags & REQ_FLAG_BUNDLE) == -1) {
+                /* The camp could not be told, so it would never release: undo the grant
+                 * and leave the request waiting. */
+                banker_release(&rm->bk, p->slot, p->vec);
+                if (rm->jr && journal_locked(rm, JR_RELEASE, r->camp_id, r->id, p->vec, &useq) == 0)
+                    EV_WARN("grant_undone", "camp=%u id=%u vec=%s seq=%llu", r->camp_id, r->id,
+                            vec(p->vec, v, sizeof v), useq);
+                prev = p;
+                p = next;
+                continue;
+            }
+            double commit_us = (double)(mono_ns() - t0) / 1e3;
             rm->grants++;
             EV_INFO("grant", "camp=%u id=%u resource=%s units=%d vec=%s qty=%u waited_min=%.1f retries=%u "
-                    "available=%s safe_seq=%s",
+                    "available=%s safe_seq=%s seq=%llu commit_us=%.1f",
                     r->camp_id, r->id, item_res(p), p->bundle ? 0 : item_units(p), vec(p->vec, v, sizeof v),
                     r->quantity, (double)(mono_ns() - p->since_ns) / (double)rm->scale_ns, p->retries,
-                    vec(rm->bk.available, a, sizeof a), seq_str(rm, seq, len, s, sizeof s));
+                    vec(rm->bk.available, a, sizeof a), seq_str(rm, seq, len, s, sizeof s), jseq, commit_us);
             if (rm->on_grant && !p->bundle) {
                 rm->on_grant(rm->grant_ctx, r);
             } else if (rm->on_grant) {
@@ -352,6 +388,8 @@ static void recover_locked(resmgr_t *rm, const waitfor_t *g, const int *cycle, i
     }
     if (reply_locked(rm, victim, MSG_REVOKE, &pick->req, pick->bundle ? REQ_FLAG_BUNDLE : 0) == -1)
         return;                     /* the camp would not know: keep the state consistent */
+    unsigned long long jseq;
+    journal_locked(rm, JR_RELEASE, rm->slot_camp[victim], pick->req.id, pick->vec, &jseq);
     banker_release(&rm->bk, victim, pick->vec);
     list_unlink(&rm->granted, pick_prev, pick);
     pick->since_ns = mono_ns();
@@ -360,9 +398,9 @@ static void recover_locked(resmgr_t *rm, const waitfor_t *g, const int *cycle, i
     list_append(&rm->waiting, pick);        /* roll the request back and queue it again */
     rm->recoveries++;
     EV_WARN("recovery", "victim=camp%u severity=%s preempted_id=%u resource=%s units=%d vec=%s requeued=1 "
-            "available=%s", rm->slot_camp[victim], relief_severity_name((unsigned)(vsev < 0 ? 0 : vsev)),
+            "available=%s seq=%llu", rm->slot_camp[victim], relief_severity_name((unsigned)(vsev < 0 ? 0 : vsev)),
             pick->req.id, item_res(pick), item_units(pick), vec(pick->vec, v, sizeof v),
-            vec(rm->bk.available, a, sizeof a));
+            vec(rm->bk.available, a, sizeof a), jseq);
     rm->dirty = 1;
     pthread_cond_signal(&rm->wake);
 }
@@ -423,6 +461,67 @@ static void *detector_main(void *arg)
 
 /* ---- Lifecycle and the main thread's calls ------------------------------------------------ */
 
+/* Rebuild the Banker's state from the journal (before any thread or camp exists): each
+ * committed claim becomes an active process, each committed grant a held grant. */
+static int recover(resmgr_t *rm, const char *dir)
+{
+    const jr_state_t *s;
+    jr_recovery_t rec;
+    int alloc[NSLOTS][NRES];
+    char a[48], v[48], all[640];
+    size_t o = 0;
+    int64_t t0 = mono_ns();
+
+    all[0] = '\0';
+    if (!dir) {
+        EV_INFO("recovered", "journal=off records=0 camps=0 grants=0 alloc=-");
+        return 0;
+    }
+    rm->jr = journal_open(dir, &s, &rec);
+    if (!rm->jr)
+        return -1;
+    memset(alloc, 0, sizeof alloc);
+    for (int i = 0; i < s->nclaim; i++) {
+        rm->slot_camp[i] = s->claim[i].camp;
+        if (banker_set_max(&rm->bk, i, s->claim[i].max) == -1)
+            goto bad;
+    }
+    for (int i = 0; i < s->ngrant; i++) {
+        const jr_grant_t *g = &s->grant[i];
+        item_t *it = calloc(1, sizeof *it);
+        int p = slot_of(rm, g->camp), kinds = 0;
+        if (!it)
+            return -1;
+        it->req.camp_id = g->camp;
+        it->req.id = g->id;
+        it->slot = p;
+        it->since_ns = t0;
+        for (int j = 0; j < NRES; j++) {
+            it->vec[j] = g->units[j];
+            alloc[p][j] += g->units[j];
+            kinds += g->units[j] > 0;
+        }
+        it->bundle = kinds > 1;
+        list_append(&rm->granted, it);
+    }
+    for (int p = 0; p < s->nclaim; p++) {
+        if (banker_set_alloc(&rm->bk, p, alloc[p]) == -1)
+            goto bad;
+        if (memcmp(alloc[p], (int[NRES]){ 0 }, sizeof alloc[p]) && o < sizeof all)
+            o += (size_t)snprintf(all + o, sizeof all - o, "%s%u:%s", o ? "/" : "", rm->slot_camp[p],
+                                  vec(alloc[p], v, sizeof v));
+    }
+    EV_INFO("recovered", "journal=on records=%llu snapshot_seq=%llu last_seq=%llu skipped_bytes=%ld camps=%d "
+            "grants=%d alloc=%s available=%s ms=%.1f", (unsigned long long)rec.records,
+            (unsigned long long)rec.snapshot_seq, (unsigned long long)rec.last_seq, rec.skipped_bytes, s->nclaim,
+            s->ngrant, o ? all : "-", vec(rm->bk.available, a, sizeof a), (double)(mono_ns() - t0) / 1e6);
+    return 0;
+bad:
+    EV_ERROR("journal_corrupt", "reason=state_does_not_fit_resources hint=\"resources.conf changed? remove "
+             "%s/%s and %s/%s\"", dir, JR_LOG_FILE, dir, JR_SNAPSHOT_FILE);
+    return -1;
+}
+
 resmgr_t *resmgr_start(const resmgr_config_t *cfg)
 {
     const deadlock_policy_t *pol = deadlock_policy_find(cfg->mode);
@@ -445,6 +544,16 @@ resmgr_t *resmgr_start(const resmgr_config_t *cfg)
     rm->on_grant = cfg->on_grant;
     rm->grant_ctx = cfg->grant_ctx;
     snprintf(rm->last_cycle, sizeof rm->last_cycle, "-");
+    if (recover(rm, cfg->journal_dir) == -1) {
+        journal_close(rm->jr);
+        while (rm->granted.head) {
+            item_t *p = rm->granted.head;
+            rm->granted.head = p->next;
+            free(p);
+        }
+        free(rm);
+        return NULL;
+    }
     pthread_mutex_init(&rm->lock, NULL);
     pthread_cond_init(&rm->wake, NULL);
     pthread_cond_init(&rm->tick, NULL);
@@ -496,10 +605,13 @@ static void forget_locked(resmgr_t *rm, int p, const char *why)
     }
     memcpy(held, rm->bk.alloc[p], sizeof held);
     if (rm->bk.active[p] || dropped) {
+        unsigned long long jseq = 0;
+        if (rm->bk.active[p])       /* a lost RELEASE_ALL only over-reserves after a crash */
+            journal_locked(rm, JR_RELEASE_ALL, rm->slot_camp[p], 0, NULL, &jseq);
         banker_remove(&rm->bk, p);
-        EV_INFO("release_all", "camp=%u reason=%s returned=%s dropped_waiting=%u available=%s",
+        EV_INFO("release_all", "camp=%u reason=%s returned=%s dropped_waiting=%u available=%s seq=%llu",
                 rm->slot_camp[p], why, vec(held, h, sizeof h), dropped,
-                vec(rm->bk.available, a, sizeof a));
+                vec(rm->bk.available, a, sizeof a), jseq);
     }
     rm->dirty = 1;
     pthread_cond_signal(&rm->wake);
@@ -529,6 +641,8 @@ void resmgr_hello(resmgr_t *rm, uint32_t camp, const relief_hello_t *hello)
             clamped = 1;
         }
     }
+    unsigned long long jseq;
+    journal_locked(rm, JR_CLAIM, camp, 0, max, &jseq);
     banker_set_max(&rm->bk, p, max);
     if (rm->reply[p] != (mqd_t)-1) {
         mq_close(rm->reply[p]);
@@ -540,8 +654,8 @@ void resmgr_hello(resmgr_t *rm, uint32_t camp, const relief_hello_t *hello)
         if (rm->reply[p] == (mqd_t)-1)
             EV_WARN("reply_queue_missing", "camp=%u queue=%s errno=%d", camp, name, errno);
     }
-    EV_INFO("claim", "camp=%u max=%s clamped=%d reply_queue=%d", camp, vec(max, m, sizeof m), clamped,
-            rm->reply[p] != (mqd_t)-1);
+    EV_INFO("claim", "camp=%u max=%s clamped=%d reply_queue=%d seq=%llu", camp, vec(max, m, sizeof m), clamped,
+            rm->reply[p] != (mqd_t)-1, jseq);
     rm->dirty = 1;
     pthread_cond_signal(&rm->wake);
     pthread_mutex_unlock(&rm->lock);
@@ -618,12 +732,14 @@ void resmgr_release(resmgr_t *rm, const relief_request_t *req)
         EV_WARN("stray_release", "camp=%u id=%u dropped_waiting=%u", req->camp_id, req->id, dropped);
         return;
     }
+    unsigned long long jseq;
+    journal_locked(rm, JR_RELEASE, req->camp_id, req->id, q->vec, &jseq);  /* lost: over-reserves only */
     banker_release(&rm->bk, p, q->vec);
     list_unlink(&rm->granted, prev, q);
     rm->releases++;
-    EV_INFO("release", "camp=%u id=%u resource=%s units=%d vec=%s available=%s", req->camp_id, req->id,
+    EV_INFO("release", "camp=%u id=%u resource=%s units=%d vec=%s available=%s seq=%llu", req->camp_id, req->id,
             item_res(q), q->bundle ? 0 : item_units(q), vec(q->vec, v, sizeof v),
-            vec(rm->bk.available, a, sizeof a));
+            vec(rm->bk.available, a, sizeof a), jseq);
     free(q);
     rm->dirty = 1;
     pthread_cond_signal(&rm->wake);   /* waiting requests are retried */
@@ -746,6 +862,7 @@ void resmgr_stop(resmgr_t *rm)
     for (int i = 0; i < NSLOTS; i++)
         if (rm->reply[i] != (mqd_t)-1)
             mq_close(rm->reply[i]);
+    journal_close(rm->jr);          /* checkpoint: the next start replays nothing */
     if (rm->started)
         EV_INFO("banker_stop", "mode=%s grants=%llu denied_unsafe=%llu waits_unavailable=%llu "
                 "releases=%llu rejects=%llu order_rejects=%llu deadlocks=%llu recoveries=%llu abandoned=%u",

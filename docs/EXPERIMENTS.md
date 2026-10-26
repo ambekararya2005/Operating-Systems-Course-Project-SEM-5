@@ -14,6 +14,7 @@ Every experiment is deterministic for a given `--seed` and writes CSV to `experi
 | E5 | Memory allocation and fragmentation (Unit 4) | How do first/best/worst fit, the buddy system and slab allocation compare on the same shipment trace? | done |
 | E6 | Virtual memory: page replacement (Unit 4) | How do FIFO, LRU, Optimal and expiry-first trade stock-outs (page faults) against expired stock as shelf space grows? | done |
 | E8 | Disk scheduling (Unit 5) | How far does a delivery truck drive under FCFS, SSTF, SCAN, C-SCAN and LIFO, and which stop is left waiting longest? | done |
+| E9 | File-system implementation: journaling, crash recovery (Unit 5) | How many Banker's allocations does a kill -9 lose with and without a write-ahead journal, and what does the fsync cost per grant? | done |
 
 ## E1: triage scheduling comparison
 
@@ -666,6 +667,46 @@ and which stop is left waiting longest?
    on where new stops appear, and that bound is why disks use it.
 3. **C-SCAN pays for uniform waits with the return trip.** 159 of its 347 km are the empty jump back.
    Without the jump it drives less than SCAN (188 km on average).
+
+## E9: the allocation journal, crash recovery vs fsync cost
+**Question:** reliefd keeps the Banker's state (claims, held grants) in memory. How much does a
+crash (kill -9) lose with and without the write-ahead journal, and what does the journal cost?
+
+**Setup:** `make e9` (`experiments/run_e9.sh`):
+- **Journal:** every claim, grant, release and release-all becomes one 40-byte record with a
+  CRC32 (`src/io/journal.c`). It is written to `$RELIEF_HOME/journal.log` with `write()` and
+  `fsync()` before the change is acknowledged. Every 100 records the whole state goes to
+  `snapshot.bin` (temp file, fsync, `rename()`) and the journal is truncated. On startup reliefd
+  replays snapshot + journal (`event=recovered`). `reliefd --no-journal` turns it off.
+- **Crashes:** `tests/crash_test.sh` kills reliefd with `kill -9` at 10 random moments (0.3–3 s,
+  seed 1) on the flood scenario and restarts it each time. A separate Python reader of the record
+  format (`tests/helpers/journal_check.py`) compares three states: what reliefd acknowledged
+  before the crash (log lines are written after the fsync), what the journal holds, and what the
+  restarted reliefd rebuilt.
+- **Cost:** the flood scenario run to the end, 3 times per mode. Each grant logs `commit_us`: from
+  the Banker's decision to the camp being told, including the journal write and fsync.
+
+| | Journal | `--no-journal` |
+|---|---:|---:|
+| Units held at the 10 crashes | 245 | 232 |
+| **Units lost** | **0** | **232 (all)** |
+| Time per grant, mean (p50 / p99) | 2,351 µs (2,207 / 5,898) | 24 µs (25 / 50) |
+| fsync per record, mean | 2,294 µs | – |
+| Whole scenario, wall time | 4.69 s | 4.79 s |
+
+**Conclusion:**
+1. **The journal loses nothing.** In all 10 crashes the recovered state equals the journal, and
+   the journal at the last acknowledged change equals what reliefd had acknowledged. Without it
+   every crash forgets all held trucks, boats and crates. The camps still hold them, so the Banker's
+   tables would hand the same units out twice.
+2. **Only the last write can be torn, and replay drops it.** A 20-byte partial record and a
+   40-byte record with a bad CRC, both appended after a crash, are skipped (`skipped_bytes=20/40`).
+   The restart then checkpoints at once, so the bad tail is gone.
+3. **Durability costs about 100× per grant, almost all of it fsync** (about 2.3 ms on WSL2's
+   virtual disk). The scenario still takes the same wall time because camps are paced: the
+   allocator is idle most of the time. The cost would show only at hundreds of grants per
+   second. That is why checkpoints keep the journal short (fast recovery) and why the grant
+   is acknowledged only after the fsync, never before.
 
 ## Baseline (Phase 2 step 2)
 `schedsim --teams 3` on `scenarios/flood_pune.csv` (200 requests in 360 min, permanently overloaded). The

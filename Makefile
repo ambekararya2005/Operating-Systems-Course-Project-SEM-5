@@ -17,6 +17,7 @@
 #                   + tests/mem.sh (test_mem: textbook fits, buddy, slab; memsim determinism, --show)
 #                   + tests/page.sh (test_page: FIFO 15 / LRU 12 / OPT 9, Belady; pagesim --verbose)
 #                   + tests/route.sh (test_disk: FCFS 640 / SSTF 236 / SCAN 331 / C-SCAN 382; routesim)
+#                   + tests/crash_test.sh (journal: kill -9 x 10, recovery loses 0; --no-journal loses all)
 #   make tsan       ThreadSanitizer build in build/tsan/ + tests
 #   make valgrind   tests with reliefd and camps under valgrind
 #   make run        run reliefd in the foreground (RELIEF_HOME=./run)
@@ -37,6 +38,8 @@
 #                   experiments/results/e6.csv + PNG (copied to docs/figures/e6/)
 #   make e8         experiment E8: delivery routing FCFS/SSTF/SCAN/C-SCAN/LIFO, 20 stops x 5 seeds ->
 #                   experiments/results/e8.csv + PNG (copied to docs/figures/e8/)
+#   make e9         experiment E9: journal cost (time per grant, fsync) and kill -9 crashes with
+#                   and without it -> experiments/results/e9_cost.csv, e9_crash.csv + summary tables
 #   make e4b        experiment E4b: readers-writers starvation, rwlab semaphore vs rwlock x 5 runs ->
 #                   experiments/results/e4b.csv + summary table
 
@@ -56,7 +59,7 @@ DEADLOCK_SRC := src/deadlock/banker.c src/deadlock/deadlock.c src/deadlock/waitf
 SCHED_POLICY_SRC := src/sched/sched.c src/sched/fcfs.c src/sched/sjf.c src/sched/srtf.c \
                     src/sched/rr.c src/sched/prio.c src/sched/mlfq.c
 RELIEFD_SRC := src/reliefd/main.c src/reliefd/camps.c src/reliefd/dispatch.c src/reliefd/dock.c \
-               src/reliefd/inventory.c src/reliefd/resmgr.c $(COMMON_SRC) $(DEADLOCK_SRC) \
+               src/reliefd/inventory.c src/reliefd/resmgr.c src/io/journal.c $(COMMON_SRC) $(DEADLOCK_SRC) \
                $(SCHED_POLICY_SRC)
 CAMP_SRC    := src/camp/main.c $(COMMON_SRC)
 RELIEFSTAT_SRC := src/reliefstat/main.c src/common/shm.c src/deadlock/banker.c src/deadlock/waitfor.c
@@ -109,7 +112,7 @@ TESTS := tests/smoke.sh tests/camps.sh tests/traffic.sh tests/signals.sh tests/s
          tests/phase1_smoke.sh tests/sched.sh tests/dispatch.sh tests/linuxsched.sh tests/phase2_check.sh \
          tests/racelab.sh tests/sync.sh tests/dock.sh tests/banker.sh tests/deadlock.sh \
          tests/phase3_check.sh tests/ui.sh tests/web.sh \
-         tests/mem.sh tests/page.sh tests/route.sh
+         tests/mem.sh tests/page.sh tests/route.sh tests/crash_test.sh
 
 # --trace-children: camps exec'd by reliefd also run under valgrind.
 VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
@@ -119,7 +122,7 @@ VALGRIND := valgrind --quiet --error-exitcode=99 --leak-check=full \
 # $(call run_tests,ENV...) runs every test script with the given environment.
 run_tests = for t in $(TESTS); do echo "== $$t"; $(1) $$t || exit 1; done
 
-.PHONY: all reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim reliefui memsim pagesim routesim ui clean run test tsan valgrind e1 e2 e3 e4 e4b e5 e6 e8
+.PHONY: all reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim reliefui memsim pagesim routesim ui clean run test tsan valgrind e1 e2 e3 e4 e4b e5 e6 e8 e9
 
 all: reliefd camp reliefstat schedsim linuxsched racelab rwlab dlsim reliefui memsim pagesim routesim $(BUILD)/shm_die_locked $(BUILD)/test_sched \
      $(BUILD)/test_sync $(BUILD)/test_banker $(BUILD)/test_mem $(BUILD)/test_page $(BUILD)/test_disk
@@ -270,6 +273,10 @@ e8: routesim
 	python3 -I experiments/plot_e8.py
 	@mkdir -p docs/figures/e8
 	cp experiments/results/e8_routing.png docs/figures/e8/
+
+# Experiment E9 (real time and fsync: tables, no plot).
+e9: reliefd camp
+	experiments/run_e9.sh
 
 # Experiment E4b (real threads; a table, no plot).
 e4b: rwlab
