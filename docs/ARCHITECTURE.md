@@ -630,6 +630,62 @@ table: `mem_ops_t` in `mem.h`, `page_policy_t` in `paging.h`.
 
 Results: E5 (fragmentation and failures) and E6 (faults vs frames) in `docs/EXPERIMENTS.md`.
 
+## Phase 5: disk scheduling and the journal (`src/io/`)
+**Disk scheduling: a standalone simulator.** `routesim` plans a truck's route along one highway.
+The policies sit behind `disk_policy_t` in `disk.h`.
+
+| Relief world | Disk concept | Where |
+|--------------|--------------|-------|
+| Highway, km 0–199 | Disk, cylinders 0–199 | `routesim --max` |
+| Truck | Disk head | `--start KM --dir up|down` |
+| Delivery stop | I/O request | `--stops LIST` or `--seed S` |
+| Order of the stops | Disk scheduling policy | `disk.c`: FCFS, SSTF, SCAN, C-SCAN, LIFO |
+| km driven | Seek distance | `total` (C-SCAN's empty return jump counted, shown separately) |
+| Km driven before a stop is reached | Request wait | `worst_wait`, `worst detour` |
+
+SCAN and C-SCAN move up and go to the end of the highway. C-SCAN's jump back to 0 counts as
+distance. On the textbook queue from 53: FCFS 640, SSTF 236, SCAN 331, C-SCAN 382.
+
+**The journal: inside reliefd.** `journal.c` makes `resmgr.c`'s Banker's state survive a crash.
+
+Record (40 bytes, little-endian; the same layout in `journal.log` and `snapshot.bin`):
+
+| Bytes | Field | Meaning |
+|------:|-------|---------|
+| 0–7 | `u64 seq` | 1, 2, 3, ... with no gaps; continues across checkpoints |
+| 8–11 | `u32 type` | 1 CLAIM (max claim), 2 GRANT, 3 RELEASE (also a revoke), 4 RELEASE_ALL (camp gone), 5 SNAPSHOT (header) |
+| 12–15 | `u32 camp` | camp id |
+| 16–19 | `u32 id` | request id (GRANT and RELEASE); for SNAPSHOT, the number of records that follow |
+| 20–35 | `i32 units[4]` | TRUCK, BOAT, MED_KIT, FOOD_KIT (a bundle is one record, so it stays atomic) |
+| 36–39 | `u32 crc32` | IEEE CRC-32 of bytes 0–35 (the same as `zlib.crc32`) |
+
+Write path, under resmgr's lock:
+1. The Banker's check grants tentatively.
+2. The record is appended with `write()` and `fsync()`.
+3. The camp is told and the log line (`seq=`) is written.
+
+If step 2 fails, the grant is rolled back. A lost release or RELEASE_ALL only over-reserves after
+a crash, so it is never unsafe.
+
+Every 100 records, a checkpoint:
+1. Write the state (a SNAPSHOT header, one CLAIM per camp, one GRANT per held grant) to `snapshot.tmp`, then `fsync`.
+2. `rename()` it over `snapshot.bin`, which is atomic, then `fsync` the directory.
+3. Truncate `journal.log`.
+
+Recovery (`journal_open`, called from `resmgr_start` before any thread or camp exists):
+1. Load `snapshot.bin`: its header seq S, then each claim and grant. A corrupt snapshot stops reliefd.
+2. Replay `journal.log`: skip records with seq ≤ S. Stop at a torn or bad-CRC record, a seq gap,
+   or a record that does not fit the state. Only the last write can be torn, since every earlier
+   one was fsync'ed.
+3. Rebuild the Banker's tables: `banker_set_max` per claim, `banker_set_alloc` per camp, and the held-grant list.
+4. Log `event=recovered records= snapshot_seq= last_seq= skipped_bytes= alloc=`, then checkpoint at
+   once, which drops a torn tail.
+5. When each camp process is restarted and says HELLO again, its recovered grants are released.
+   This is process termination, as for any camp that exits.
+
+`reliefd --no-journal` turns all of this off (experiment E9). Results: E8 (routing) and E9
+(journal: allocations lost, fsync cost) in `docs/EXPERIMENTS.md`.
+
 ## Structured log (`$RELIEF_HOME/logs/reliefd.log`)
 One event per line: `ts=<iso8601> level=<lvl> comp=reliefd pid=<pid> event=<name> key=value ...`.
 Values contain no spaces, except `msg="..."` on free-form `event=log` lines. Events include
@@ -640,6 +696,6 @@ Values contain no spaces, except `msg="..."` on free-form `event=log` lines. Eve
 
 ## TODO
 - [x] Component diagram (Phase 1 process model above)
-- [ ] Request lifecycle (camp → scheduler → allocator → router → journal)
+- [ ] Request lifecycle (camp → scheduler → allocator → journal); the router (`routesim`) is offline
 - [x] Thread model inside reliefd (Phase 2 live scheduling section)
 - [x] Policy plug-in interfaces (function-pointer tables): `sched_policy_t`, Phase 2 section above

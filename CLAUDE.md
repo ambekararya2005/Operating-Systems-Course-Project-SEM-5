@@ -116,5 +116,5 @@ Layout (folders marked * are created in later phases):
 Work the phases in order. Within a phase, ship all P0 features before any P1/P2.
 
 ## Current status
-Phase 2 complete (gate M2). Phase 3 complete (gate M3). Phase 4 complete (gate M4: `memsim` E5, `pagesim` E6). Phase 5: steps 1-2 done (`routesim` E8; write-ahead journal + crash recovery, E9).
+Phase 2 complete (gate M2). Phase 3 complete (gate M3). Phase 4 complete (gate M4: `memsim` E5, `pagesim` E6). Phase 5 complete (gate M5: `routesim` E8, write-ahead journal + crash recovery E9).
 Update this line as steps complete.

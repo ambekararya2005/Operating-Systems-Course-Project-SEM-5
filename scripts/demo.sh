@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # OS concept: Shell programming — a guided demo of ReliefOS, one syllabus topic per step (Unit 1)
 #
-# demo.sh: walks through what ReliefOS shows so far (Phases 1-3), pausing after each step.
+# demo.sh: walks through what ReliefOS shows so far (Phases 1-5), pausing after each step.
 #   usage: demo.sh [-y] [-u]
 #     -y  do not pause between steps (run straight through)
 #     -u  include the live dashboard step (reliefctl ui): watch it, press q to continue
@@ -18,6 +18,8 @@
 #      reliefctl waitfor), then under --deadlock detect (found and broken)         (Unit 3)
 #   8. memory: the warehouse floor under the buddy system and slab caches (memsim --show),
 #      and LRU page replacement on the textbook reference string (pagesim --verbose)  (Unit 4)
+#   9. disk scheduling: the truck's route under SSTF and C-SCAN (routesim track diagrams);
+#      the journal: kill -9 of reliefd, restart, event=recovered                    (Unit 5)
 # Exit status: 0 done, 1 a step failed, 2 usage error.
 set -euo pipefail
 
@@ -117,6 +119,27 @@ echo "Slab caches: F/M/H are FOOD/MED/HYGIENE kits in their own slabs, '_' a fre
 echo
 echo "LRU on the textbook reference string with 3 shelf slots (frames):"
 "$ROOT/build/pagesim" --policy lru --frames 3 --refs 7,0,1,2,0,3,0,4,2,3,0,3,2,1,2,0,1,7,0,1 --verbose
+next
+
+step "9. Files: the highway as a disk (routesim), the Banker's journal surviving kill -9 (Unit 5)"
+echo "SSTF: always the nearest stop next (236 km on the textbook queue):"
+"$ROOT/build/routesim" --policy sstf --stops 98,183,37,122,14,124,65,67 --width 80
+echo
+echo "C-SCAN: sweep up to the end, jump back to 0, sweep up again (382 km incl. the 199 km jump):"
+"$ROOT/build/routesim" --policy cscan --stops 98,183,37,122,14,124,65,67 --width 80
+next
+unset RELIEF_CAMPS RELIEF_SCENARIO
+"$CTL" start
+sleep 4
+pid=$(cat "$RELIEF_HOME/reliefd.pid")
+echo "reliefd (pid $pid) has fsync'ed $(awk '/ event=daemon_start /{n = 0} / event=grant /{n++} END {print n + 0}' "$RELIEF_HOME/logs/reliefd.log") grants to journal.log; kill -9 $pid:"
+kill -KILL "$pid"
+sleep 2                                  # the camps die with it (PR_SET_PDEATHSIG)
+"$CTL" start
+sleep 1
+echo "the restarted reliefd replayed snapshot.bin + journal.log:"
+grep ' event=recovered ' "$RELIEF_HOME/logs/reliefd.log" | tail -1 | sed 's/^ts=[^ ]* //'
+"$CTL" stop
 
 echo
 echo "Demo done. Logs: $RELIEF_HOME/logs/reliefd.log (awk-friendly key=value)."
