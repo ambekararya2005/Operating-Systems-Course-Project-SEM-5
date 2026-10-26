@@ -1,0 +1,644 @@
+86593 03:28:24.139187 execve("<repo>/build/reliefd", ["/home/arya_ambekar/os-course-pro"..., "--camps", "$WORK/camps"..., "--scenario", "$WORK/scena"..., "--time-scale", "20"], 0x7ffd58b9c1b0 /* 39 vars */) = 0
+86593 03:28:24.139930 brk(NULL)         = 0x634bdec7f000
+86593 03:28:24.140086 mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7ad1a56dd000
+86593 03:28:24.140312 openat(AT_FDCWD, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC) = 3
+86593 03:28:24.140456 fstat(3, {st_mode=S_IFREG|0644, st_size=22027, ...}) = 0
+86593 03:28:24.140629 mmap(NULL, 22027, PROT_READ, MAP_PRIVATE, 3, 0) = 0x7ad1a56d7000
+86593 03:28:24.140752 close(3)          = 0
+86593 03:28:24.140869 openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libc.so.6", O_RDONLY|O_CLOEXEC) = 3
+86593 03:28:24.140998 read(3, "\177ELF\2\1\1\3\0\0\0\0\0\0\0\0\3\0>\0\1\0\0\0\220\243\2\0\0\0\0\0"..., 832) = 832
+86593 03:28:24.141129 pread64(3, "\6\0\0\0\4\0\0\0@\0\0\0\0\0\0\0@\0\0\0\0\0\0\0@\0\0\0\0\0\0\0"..., 784, 64) = 784
+86593 03:28:24.141269 fstat(3, {st_mode=S_IFREG|0755, st_size=2129424, ...}) = 0
+86593 03:28:24.141388 pread64(3, "\6\0\0\0\4\0\0\0@\0\0\0\0\0\0\0@\0\0\0\0\0\0\0@\0\0\0\0\0\0\0"..., 784, 64) = 784
+86593 03:28:24.141516 mmap(NULL, 2174352, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7ad1a5400000
+86593 03:28:24.141672 mmap(0x7ad1a5428000, 1609728, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x28000) = 0x7ad1a5428000
+86593 03:28:24.141823 mmap(0x7ad1a55b1000, 323584, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x1b1000) = 0x7ad1a55b1000
+86593 03:28:24.141984 mmap(0x7ad1a5600000, 24576, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x1ff000) = 0x7ad1a5600000
+86593 03:28:24.142194 mmap(0x7ad1a5606000, 52624, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0) = 0x7ad1a5606000
+86593 03:28:24.142348 close(3)          = 0
+86593 03:28:24.142473 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7ad1a56d4000
+86593 03:28:24.143044 mprotect(0x7ad1a5600000, 16384, PROT_READ) = 0
+86593 03:28:24.143214 mprotect(0x634bcd1cb000, 4096, PROT_READ) = 0
+86593 03:28:24.143340 mprotect(0x7ad1a571d000, 8192, PROT_READ) = 0
+86593 03:28:24.143633 munmap(0x7ad1a56d7000, 22027) = 0
+86593 03:28:24.144245 brk(NULL)         = 0x634bdec7f000
+86593 03:28:24.144378 brk(0x634bdeca0000) = 0x634bdeca0000
+86593 03:28:24.144529 openat(AT_FDCWD, "$WORK/home/logs/reliefd.log", O_WRONLY|O_CREAT|O_APPEND|O_CLOEXEC, 0666) = 3
+86593 03:28:24.144687 lseek(3, 0, SEEK_END) = 0
+86593 03:28:24.145464 openat(AT_FDCWD, "scenarios/resources.conf", O_RDONLY) = 4
+86593 03:28:24.145611 fstat(4, {st_mode=S_IFREG|0644, st_size=316, ...}) = 0
+86593 03:28:24.145755 read(4, "# ReliefOS Banker's algorithm re"..., 4096) = 316
+86593 03:28:24.145881 read(4, "", 4096) = 0
+86593 03:28:24.146022 close(4)          = 0
+86593 03:28:24.146524 openat(AT_FDCWD, "$WORK/camps.conf", O_RDONLY) = 4
+86593 03:28:24.146650 fstat(4, {st_mode=S_IFREG|0644, st_size=11, ...}) = 0
+86593 03:28:24.146770 read(4, "1 Hadapsar\n", 4096) = 11
+86593 03:28:24.146893 read(4, "", 4096) = 0
+86593 03:28:24.147038 close(4)          = 0
+86593 03:28:24.147182 openat(AT_FDCWD, "/etc/localtime", O_RDONLY|O_CLOEXEC) = 4
+86593 03:28:24.147334 fstat(4, {st_mode=S_IFREG|0644, st_size=114, ...}) = 0
+86593 03:28:24.147473 fstat(4, {st_mode=S_IFREG|0644, st_size=114, ...}) = 0
+86593 03:28:24.147614 read(4, "TZif2\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"..., 4096) = 114
+86593 03:28:24.147763 lseek(4, -60, SEEK_CUR) = 54
+86593 03:28:24.147892 read(4, "TZif2\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"..., 4096) = 60
+86593 03:28:24.148014 close(4)          = 0
+86593 03:28:24.148284 write(2, "2026-10-26T03:28:24.147 INFO  re"..., 115) = 115
+86593 03:28:24.148556 fstat(3, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+86593 03:28:24.148705 write(3, "ts=2026-10-26T03:28:24.147 level"..., 131) = 131
+86593 03:28:24.148849 openat(AT_FDCWD, "$WORK/home/reliefd.pid", O_RDONLY) = -1 ENOENT (No such file or directory)
+86593 03:28:24.149105 mq_open("reliefos_requests", O_RDONLY|O_CREAT|O_EXCL, 0660, {mq_flags=0, mq_maxmsg=10, mq_msgsize=128, mq_curmsgs=0}) = 4
+86593 03:28:24.149351 openat(AT_FDCWD, "/dev/shm/reliefos_status", O_RDWR|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC, 0644) = 5
+86593 03:28:24.149521 ftruncate(5, 9136) = 0
+86593 03:28:24.149631 mmap(NULL, 9136, PROT_READ|PROT_WRITE, MAP_SHARED, 5, 0) = 0x7ad1a56da000
+86593 03:28:24.149826 close(5)          = 0
+86593 03:28:24.150207 rt_sigaction(SIGINT, {sa_handler=0x634bcd1b92e0, sa_mask=[], sa_flags=SA_RESTORER, sa_restorer=0x7ad1a5445330}, NULL, 8) = 0
+86593 03:28:24.150379 rt_sigaction(SIGTERM, {sa_handler=0x634bcd1b92e0, sa_mask=[], sa_flags=SA_RESTORER, sa_restorer=0x7ad1a5445330}, NULL, 8) = 0
+86593 03:28:24.150527 rt_sigaction(SIGCHLD, {sa_handler=0x634bcd1b92f0, sa_mask=[], sa_flags=SA_RESTORER|SA_NOCLDSTOP, sa_restorer=0x7ad1a5445330}, NULL, 8) = 0
+86593 03:28:24.150644 openat(AT_FDCWD, "$WORK/home/reliefd.pid", O_WRONLY|O_CREAT|O_TRUNC, 0666) = 5
+86593 03:28:24.150901 fstat(5, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+86593 03:28:24.151029 write(5, "86593\n", 6) = 6
+86593 03:28:24.151175 close(5)          = 0
+86593 03:28:24.151391 write(2, "2026-10-26T03:28:24.151 INFO  re"..., 228) = 228
+86593 03:28:24.151604 write(3, "ts=2026-10-26T03:28:24.151 level"..., 244) = 244
+86593 03:28:24.151735 rt_sigprocmask(SIG_BLOCK, ~[RTMIN RT_1], [], 8) = 0
+86593 03:28:24.151858 rt_sigaction(SIGRT_1, {sa_handler=0x7ad1a5499610, sa_mask=[], sa_flags=SA_RESTORER|SA_ONSTACK|SA_RESTART|SA_SIGINFO, sa_restorer=0x7ad1a5445330}, NULL, 8) = 0
+86593 03:28:24.151981 rt_sigprocmask(SIG_UNBLOCK, [RTMIN RT_1], NULL, 8) = 0
+86593 03:28:24.152124 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7ad1a4bff000
+86593 03:28:24.152268 mprotect(0x7ad1a4c00000, 8388608, PROT_READ|PROT_WRITE) = 0
+86593 03:28:24.152399 rt_sigprocmask(SIG_BLOCK, ~[], ~[KILL STOP RTMIN RT_1], 8) = 0
+86593 03:28:24.152524 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ad1a53ff990, parent_tid=0x7ad1a53ff990, exit_signal=0, stack=0x7ad1a4bff000, stack_size=0x7fff80, tls=0x7ad1a53ff6c0} => {parent_tid=[86596]}, 88) = 86596
+86593 03:28:24.152749 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1], NULL, 8) = 0
+86593 03:28:24.152862 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7ad1a43fe000
+86596 03:28:24.152951 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1],  <unfinished ...>
+86593 03:28:24.152991 mprotect(0x7ad1a43ff000, 8388608, PROT_READ|PROT_WRITE <unfinished ...>
+86596 03:28:24.153018 <... rt_sigprocmask resumed>NULL, 8) = 0
+86593 03:28:24.153053 <... mprotect resumed>) = 0
+86596 03:28:24.153080 futex(0x634bdec7f6f0, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86593 03:28:24.153148 rt_sigprocmask(SIG_BLOCK, ~[], ~[KILL STOP RTMIN RT_1], 8) = 0
+86593 03:28:24.153287 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ad1a4bfe990, parent_tid=0x7ad1a4bfe990, exit_signal=0, stack=0x7ad1a43fe000, stack_size=0x7fff80, tls=0x7ad1a4bfe6c0} => {parent_tid=[86597]}, 88) = 86597
+86593 03:28:24.153483 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1], NULL, 8) = 0
+86593 03:28:24.153587 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7ad1a3bfd000
+86597 03:28:24.153677 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1],  <unfinished ...>
+86593 03:28:24.153708 mprotect(0x7ad1a3bfe000, 8388608, PROT_READ|PROT_WRITE <unfinished ...>
+86597 03:28:24.153735 <... rt_sigprocmask resumed>NULL, 8) = 0
+86593 03:28:24.153762 <... mprotect resumed>) = 0
+86597 03:28:24.153789 futex(0x634bdec7f6f0, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86593 03:28:24.153815 rt_sigprocmask(SIG_BLOCK, ~[], ~[KILL STOP RTMIN RT_1], 8) = 0
+86593 03:28:24.153941 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ad1a43fd990, parent_tid=0x7ad1a43fd990, exit_signal=0, stack=0x7ad1a3bfd000, stack_size=0x7fff80, tls=0x7ad1a43fd6c0} => {parent_tid=[86598]}, 88) = 86598
+86593 03:28:24.154270 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1], NULL, 8) = 0
+86593 03:28:24.154375 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7ad1a33fc000
+86598 03:28:24.154468 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1],  <unfinished ...>
+86593 03:28:24.154500 mprotect(0x7ad1a33fd000, 8388608, PROT_READ|PROT_WRITE <unfinished ...>
+86598 03:28:24.154527 <... rt_sigprocmask resumed>NULL, 8) = 0
+86593 03:28:24.154555 <... mprotect resumed>) = 0
+86598 03:28:24.154582 futex(0x634bdec7f6f0, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86593 03:28:24.154611 rt_sigprocmask(SIG_BLOCK, ~[], ~[KILL STOP RTMIN RT_1], 8) = 0
+86593 03:28:24.154735 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ad1a3bfc990, parent_tid=0x7ad1a3bfc990, exit_signal=0, stack=0x7ad1a33fc000, stack_size=0x7fff80, tls=0x7ad1a3bfc6c0} => {parent_tid=[86599]}, 88) = 86599
+86593 03:28:24.154936 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1], NULL, 8) = 0
+86593 03:28:24.155031 rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+86599 03:28:24.155106 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1], NULL, 8) = 0
+86599 03:28:24.155210 futex(0x634bdec7f6a0, FUTEX_WAIT_PRIVATE, 2, NULL <unfinished ...>
+86593 03:28:24.155237 write(2, "2026-10-26T03:28:24.155 INFO  re"..., 131) = 131
+86593 03:28:24.155477 write(3, "ts=2026-10-26T03:28:24.155 level"..., 147) = 147
+86593 03:28:24.155597 futex(0x634bdec7f6a0, FUTEX_WAKE_PRIVATE, 1) = 1
+86599 03:28:24.155713 <... futex resumed>) = 0
+86599 03:28:24.155811 futex(0x634bdec7f6a0, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86593 03:28:24.155852 write(2, "2026-10-26T03:28:24.155 INFO  re"..., 104 <unfinished ...>
+86599 03:28:24.155896 <... futex resumed>) = 0
+86593 03:28:24.155935 <... write resumed>) = 104
+86593 03:28:24.156119 write(3, "ts=2026-10-26T03:28:24.155 level"..., 120) = 120
+86593 03:28:24.156244 rt_sigprocmask(SIG_BLOCK, ~[RTMIN RT_1], [], 8) = 0
+86593 03:28:24.156368 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7ad1a2bfb000
+86593 03:28:24.156489 mprotect(0x7ad1a2bfc000, 8388608, PROT_READ|PROT_WRITE) = 0
+86593 03:28:24.156613 rt_sigprocmask(SIG_BLOCK, ~[], ~[KILL STOP RTMIN RT_1], 8) = 0
+86593 03:28:24.156738 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ad1a33fb990, parent_tid=0x7ad1a33fb990, exit_signal=0, stack=0x7ad1a2bfb000, stack_size=0x7fff80, tls=0x7ad1a33fb6c0} => {parent_tid=[86601]}, 88) = 86601
+86593 03:28:24.156958 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1], NULL, 8) = 0
+86593 03:28:24.157051 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7ad1a23fa000
+86601 03:28:24.157150 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1],  <unfinished ...>
+86593 03:28:24.157182 mprotect(0x7ad1a23fb000, 8388608, PROT_READ|PROT_WRITE <unfinished ...>
+86601 03:28:24.157209 <... rt_sigprocmask resumed>NULL, 8) = 0
+86593 03:28:24.157237 <... mprotect resumed>) = 0
+86601 03:28:24.157264 futex(0x634bdec7ff88, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86593 03:28:24.157293 rt_sigprocmask(SIG_BLOCK, ~[], ~[KILL STOP RTMIN RT_1], 8) = 0
+86593 03:28:24.157419 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ad1a2bfa990, parent_tid=0x7ad1a2bfa990, exit_signal=0, stack=0x7ad1a23fa000, stack_size=0x7fff80, tls=0x7ad1a2bfa6c0} => {parent_tid=[86602]}, 88) = 86602
+86593 03:28:24.158126 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1], NULL, 8) = 0
+86593 03:28:24.158236 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7ad1a1bf9000
+86602 03:28:24.158332 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1],  <unfinished ...>
+86593 03:28:24.158363 mprotect(0x7ad1a1bfa000, 8388608, PROT_READ|PROT_WRITE <unfinished ...>
+86602 03:28:24.158391 <... rt_sigprocmask resumed>NULL, 8) = 0
+86593 03:28:24.158419 <... mprotect resumed>) = 0
+86602 03:28:24.158446 futex(0x634bdec7ff88, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86593 03:28:24.158478 rt_sigprocmask(SIG_BLOCK, ~[], ~[KILL STOP RTMIN RT_1], 8) = 0
+86593 03:28:24.158609 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ad1a23f9990, parent_tid=0x7ad1a23f9990, exit_signal=0, stack=0x7ad1a1bf9000, stack_size=0x7fff80, tls=0x7ad1a23f96c0} => {parent_tid=[86603]}, 88) = 86603
+86593 03:28:24.158840 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1], NULL, 8) = 0
+86593 03:28:24.158939 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7ad1a13f8000
+86593 03:28:24.159092 mprotect(0x7ad1a13f9000, 8388608, PROT_READ|PROT_WRITE <unfinished ...>
+86603 03:28:24.159133 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1],  <unfinished ...>
+86593 03:28:24.159201 <... mprotect resumed>) = 0
+86603 03:28:24.159229 <... rt_sigprocmask resumed>NULL, 8) = 0
+86593 03:28:24.159257 rt_sigprocmask(SIG_BLOCK, ~[],  <unfinished ...>
+86603 03:28:24.159288 futex(0x634bdec7fe98, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86593 03:28:24.159316 <... rt_sigprocmask resumed>~[KILL STOP RTMIN RT_1], 8) = 0
+86593 03:28:24.159380 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ad1a1bf8990, parent_tid=0x7ad1a1bf8990, exit_signal=0, stack=0x7ad1a13f8000, stack_size=0x7fff80, tls=0x7ad1a1bf86c0} => {parent_tid=[86604]}, 88) = 86604
+86593 03:28:24.159583 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1], NULL, 8) = 0
+86593 03:28:24.159676 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7ad1a0bf7000
+86604 03:28:24.159768 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1],  <unfinished ...>
+86593 03:28:24.159799 mprotect(0x7ad1a0bf8000, 8388608, PROT_READ|PROT_WRITE <unfinished ...>
+86604 03:28:24.159827 <... rt_sigprocmask resumed>NULL, 8) = 0
+86593 03:28:24.159854 <... mprotect resumed>) = 0
+86604 03:28:24.159891 futex(0x634bdec7fe98, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86593 03:28:24.159919 rt_sigprocmask(SIG_BLOCK, ~[], ~[KILL STOP RTMIN RT_1], 8) = 0
+86593 03:28:24.160040 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ad1a13f7990, parent_tid=0x7ad1a13f7990, exit_signal=0, stack=0x7ad1a0bf7000, stack_size=0x7fff80, tls=0x7ad1a13f76c0} => {parent_tid=[86605]}, 88) = 86605
+86593 03:28:24.160304 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1], NULL, 8) = 0
+86593 03:28:24.160430 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7ad1a03f6000
+86605 03:28:24.160539 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1],  <unfinished ...>
+86593 03:28:24.160584 mprotect(0x7ad1a03f7000, 8388608, PROT_READ|PROT_WRITE <unfinished ...>
+86605 03:28:24.160623 <... rt_sigprocmask resumed>NULL, 8) = 0
+86593 03:28:24.160663 <... mprotect resumed>) = 0
+86605 03:28:24.160702 futex(0x634bdec7fe98, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86593 03:28:24.160742 rt_sigprocmask(SIG_BLOCK, ~[], ~[KILL STOP RTMIN RT_1], 8) = 0
+86593 03:28:24.160907 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ad1a0bf6990, parent_tid=0x7ad1a0bf6990, exit_signal=0, stack=0x7ad1a03f6000, stack_size=0x7fff80, tls=0x7ad1a0bf66c0} => {parent_tid=[86606]}, 88) = 86606
+86593 03:28:24.161192 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1], NULL, 8) = 0
+86593 03:28:24.161409 rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+86606 03:28:24.161606 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1],  <unfinished ...>
+86593 03:28:24.161648 openat(AT_FDCWD, "$WORK/home/snapshot.bin", O_RDONLY <unfinished ...>
+86606 03:28:24.161688 <... rt_sigprocmask resumed>NULL, 8) = 0
+86593 03:28:24.161761 <... openat resumed>) = -1 ENOENT (No such file or directory)
+86606 03:28:24.161803 futex(0x634bdec7fe98, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86593 03:28:24.161879 openat(AT_FDCWD, "$WORK/home/journal.log", O_RDONLY) = -1 ENOENT (No such file or directory)
+86593 03:28:24.162055 openat(AT_FDCWD, "$WORK/home/journal.log", O_WRONLY|O_CREAT|O_APPEND, 0640) = 5
+86593 03:28:24.162413 openat(AT_FDCWD, "$WORK/home/snapshot.tmp", O_WRONLY|O_CREAT|O_TRUNC, 0640) = 6
+86593 03:28:24.162558 write(6, "\0\0\0\0\0\0\0\0\5\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"..., 40) = 40
+86593 03:28:24.162712 fsync(6)          = 0
+86593 03:28:24.166412 close(6)          = 0
+86593 03:28:24.166677 openat(AT_FDCWD, "$WORK/home", O_RDONLY|O_DIRECTORY) = 6
+86593 03:28:24.166814 fsync(6)          = 0
+86593 03:28:24.168722 ftruncate(5, 0)   = 0
+86593 03:28:24.168880 fsync(5)          = 0
+86593 03:28:24.170904 close(6)          = 0
+86593 03:28:24.171134 write(2, "2026-10-26T03:28:24.170 INFO  re"..., 112) = 112
+86593 03:28:24.171414 write(3, "ts=2026-10-26T03:28:24.170 level"..., 128) = 128
+86593 03:28:24.171685 write(2, "2026-10-26T03:28:24.171 INFO  re"..., 176) = 176
+86593 03:28:24.171950 write(3, "ts=2026-10-26T03:28:24.171 level"..., 192) = 192
+86593 03:28:24.172093 rt_sigprocmask(SIG_BLOCK, ~[RTMIN RT_1], [], 8) = 0
+86593 03:28:24.172235 mmap(NULL, 8392704, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0) = 0x7ad19fbf5000
+86593 03:28:24.172380 mprotect(0x7ad19fbf6000, 8388608, PROT_READ|PROT_WRITE) = 0
+86593 03:28:24.172537 rt_sigprocmask(SIG_BLOCK, ~[], ~[KILL STOP RTMIN RT_1], 8) = 0
+86593 03:28:24.172677 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x7ad1a03f5990, parent_tid=0x7ad1a03f5990, exit_signal=0, stack=0x7ad19fbf5000, stack_size=0x7fff80, tls=0x7ad1a03f56c0} => {parent_tid=[86607]}, 88) = 86607
+86593 03:28:24.172976 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1], NULL, 8) = 0
+86593 03:28:24.173109 rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+86607 03:28:24.173176 rt_sigprocmask(SIG_SETMASK, ~[KILL STOP RTMIN RT_1], NULL, 8) = 0
+86607 03:28:24.173274 futex(0x634bdec81950, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86593 03:28:24.173302 write(2, "2026-10-26T03:28:24.173 INFO  re"..., 253) = 253
+86593 03:28:24.173523 write(3, "ts=2026-10-26T03:28:24.173 level"..., 269) = 269
+86593 03:28:24.173771 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7ad1a56d4a10) = 86608
+86593 03:28:24.174293 write(2, "2026-10-26T03:28:24.174 INFO  re"..., 104) = 104
+86608 03:28:24.174433 execve("<repo>/build/camp", ["/home/arya_ambekar/os-course-pro"..., "--id", "1", "--seed", "1", "--scenario", "$WORK/scena"..., "--time-scale", "20", "--resources", "/home/arya_ambekar/os-course-pro"...], 0x7fffb3e3b068 /* 39 vars */ <unfinished ...>
+86593 03:28:24.174491 write(3, "ts=2026-10-26T03:28:24.174 level"..., 120) = 120
+86593 03:28:24.174643 openat(AT_FDCWD, "$WORK/home/camps.pids.tmp", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 6
+86608 03:28:24.174795 <... execve resumed>) = 0
+86608 03:28:24.174862 brk(NULL)         = 0x5f0b538ea000
+86593 03:28:24.174956 fstat(6, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+86608 03:28:24.175076 mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 <unfinished ...>
+86593 03:28:24.175118 write(6, "# ReliefOS camp table, rewritten"..., 116 <unfinished ...>
+86608 03:28:24.175181 <... mmap resumed>) = 0x740a52b1e000
+86593 03:28:24.175209 <... write resumed>) = 116
+86593 03:28:24.175256 close(6)          = 0
+86608 03:28:24.175335 openat(AT_FDCWD, "/etc/ld.so.cache", O_RDONLY|O_CLOEXEC) = 3
+86593 03:28:24.175471 mq_timedreceive(4,  <unfinished ...>
+86608 03:28:24.175498 fstat(3, {st_mode=S_IFREG|0644, st_size=22027, ...}) = 0
+86608 03:28:24.175626 mmap(NULL, 22027, PROT_READ, MAP_PRIVATE, 3, 0) = 0x740a52b18000
+86608 03:28:24.175744 close(3)          = 0
+86608 03:28:24.175862 openat(AT_FDCWD, "/lib/x86_64-linux-gnu/libc.so.6", O_RDONLY|O_CLOEXEC) = 3
+86608 03:28:24.176001 read(3, "\177ELF\2\1\1\3\0\0\0\0\0\0\0\0\3\0>\0\1\0\0\0\220\243\2\0\0\0\0\0"..., 832) = 832
+86608 03:28:24.176147 pread64(3, "\6\0\0\0\4\0\0\0@\0\0\0\0\0\0\0@\0\0\0\0\0\0\0@\0\0\0\0\0\0\0"..., 784, 64) = 784
+86608 03:28:24.176284 fstat(3, {st_mode=S_IFREG|0755, st_size=2129424, ...}) = 0
+86608 03:28:24.176434 pread64(3, "\6\0\0\0\4\0\0\0@\0\0\0\0\0\0\0@\0\0\0\0\0\0\0@\0\0\0\0\0\0\0"..., 784, 64) = 784
+86608 03:28:24.176587 mmap(NULL, 2174352, PROT_READ, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x740a52800000
+86608 03:28:24.176713 mmap(0x740a52828000, 1609728, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x28000) = 0x740a52828000
+86608 03:28:24.176834 mmap(0x740a529b1000, 323584, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x1b1000) = 0x740a529b1000
+86608 03:28:24.176955 mmap(0x740a52a00000, 24576, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x1ff000) = 0x740a52a00000
+86608 03:28:24.177082 mmap(0x740a52a06000, 52624, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0) = 0x740a52a06000
+86608 03:28:24.177212 close(3)          = 0
+86608 03:28:24.177333 mmap(NULL, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x740a52b15000
+86608 03:28:24.177959 mprotect(0x740a52a00000, 16384, PROT_READ) = 0
+86608 03:28:24.178137 mprotect(0x5f0b39841000, 4096, PROT_READ) = 0
+86608 03:28:24.178307 mprotect(0x740a52b5e000, 8192, PROT_READ) = 0
+86608 03:28:24.178561 munmap(0x740a52b18000, 22027) = 0
+86608 03:28:24.178746 rt_sigaction(SIGTERM, {sa_handler=0x5f0b3983cbb0, sa_mask=[], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x740a52845330}, NULL, 8) = 0
+86608 03:28:24.178880 rt_sigaction(SIGINT, {sa_handler=0x5f0b3983cbb0, sa_mask=[], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x740a52845330}, NULL, 8) = 0
+86608 03:28:24.179005 rt_sigaction(SIGUSR1, {sa_handler=0x5f0b3983cbc0, sa_mask=[], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x740a52845330}, NULL, 8) = 0
+86608 03:28:24.179153 rt_sigaction(SIGUSR2, {sa_handler=0x5f0b3983cbd0, sa_mask=[], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x740a52845330}, NULL, 8) = 0
+86608 03:28:24.179297 rt_sigaction(SIGALRM, {sa_handler=0x5f0b3983cbe0, sa_mask=[], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x740a52845330}, NULL, 8) = 0
+86608 03:28:24.179583 brk(NULL)         = 0x5f0b538ea000
+86608 03:28:24.179721 brk(0x5f0b5390b000) = 0x5f0b5390b000
+86608 03:28:24.179865 openat(AT_FDCWD, "<repo>/scenarios/resources.conf", O_RDONLY) = 3
+86608 03:28:24.179993 fstat(3, {st_mode=S_IFREG|0644, st_size=316, ...}) = 0
+86608 03:28:24.180118 read(3, "# ReliefOS Banker's algorithm re"..., 4096) = 316
+86608 03:28:24.180246 read(3, "", 4096) = 0
+86608 03:28:24.180363 close(3)          = 0
+86608 03:28:24.180481 mq_open("reliefos_requests", O_WRONLY) = 3
+86608 03:28:24.180705 openat(AT_FDCWD, "$WORK/scenario.csv", O_RDONLY) = 4
+86608 03:28:24.180870 fstat(4, {st_mode=S_IFREG|0644, st_size=130, ...}) = 0
+86608 03:28:24.181002 read(4, "arrival_min,camp_id,severity,res"..., 4096) = 130
+86608 03:28:24.181132 read(4, "", 4096) = 0
+86608 03:28:24.181252 close(4)          = 0
+86608 03:28:24.181475 mq_open("reliefos_camp_1", O_RDONLY|O_CREAT|O_EXCL, 0600, {mq_flags=0, mq_maxmsg=10, mq_msgsize=128, mq_curmsgs=0}) = 4
+86608 03:28:24.181608 openat(AT_FDCWD, "/dev/shm/reliefos_status", O_RDWR|O_NOFOLLOW|O_CLOEXEC) = 6
+86608 03:28:24.181731 fstat(6, {st_mode=S_IFREG|0644, st_size=9136, ...}) = 0
+86608 03:28:24.181859 mmap(NULL, 9136, PROT_READ|PROT_WRITE, MAP_SHARED, 6, 0) = 0x740a52b1b000
+86608 03:28:24.181982 close(6)          = 0
+86608 03:28:24.182480 openat(AT_FDCWD, "/etc/localtime", O_RDONLY|O_CLOEXEC) = 6
+86608 03:28:24.182606 fstat(6, {st_mode=S_IFREG|0644, st_size=114, ...}) = 0
+86608 03:28:24.182722 fstat(6, {st_mode=S_IFREG|0644, st_size=114, ...}) = 0
+86608 03:28:24.182858 read(6, "TZif2\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"..., 4096) = 114
+86608 03:28:24.182996 lseek(6, -60, SEEK_CUR) = 54
+86608 03:28:24.183179 read(6, "TZif2\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"..., 4096) = 60
+86608 03:28:24.183327 close(6)          = 0
+86608 03:28:24.183548 write(2, "2026-10-26T03:28:24.182 INFO  ca"..., 101) = 101
+86608 03:28:24.183669 mq_timedsend(3, "\1\0\0\0\1\0\0\0PR\1\0\0\0\0\0\1\0\0\0\2\0\0\0\1\0\0\0\0\0\0\0"..., 128, 0, {tv_sec=1792985304, tv_nsec=683641877} <unfinished ...>
+86593 03:28:24.183762 <... mq_timedreceive resumed>"\1\0\0\0\1\0\0\0PR\1\0\0\0\0\0\1\0\0\0\2\0\0\0\1\0\0\0\0\0\0\0"..., 128, NULL, {tv_sec=1792985304, tv_nsec=675452630}) = 128
+86608 03:28:24.183809 <... mq_timedsend resumed>) = 0
+86593 03:28:24.183908 write(2, "2026-10-26T03:28:24.183 INFO  re"..., 79 <unfinished ...>
+86608 03:28:24.183939 write(2, "2026-10-26T03:28:24.183 INFO  ca"..., 91 <unfinished ...>
+86593 03:28:24.183970 <... write resumed>) = 79
+86608 03:28:24.183996 <... write resumed>) = 91
+86593 03:28:24.184090 write(3, "ts=2026-10-26T03:28:24.183 level"..., 95 <unfinished ...>
+86608 03:28:24.184121 write(2, "2026-10-26T03:28:24.184 INFO  ca"..., 115 <unfinished ...>
+86593 03:28:24.184151 <... write resumed>) = 95
+86608 03:28:24.184178 <... write resumed>) = 115
+86608 03:28:24.184222 mq_timedsend(3, "\2\0\0\0\1\0\0\0PR\1\0\0\0\0\0BB\17\0\1\0\0\0PR\1\0\0\0\1\0"..., 128, 0, {tv_sec=1792985304, tv_nsec=684211313}) = 0
+86593 03:28:24.184314 write(2, "2026-10-26T03:28:24.184 INFO  re"..., 95) = 95
+86593 03:28:24.184475 write(3, "ts=2026-10-26T03:28:24.184 level"..., 111 <unfinished ...>
+86608 03:28:24.184506 write(2, "2026-10-26T03:28:24.184 INFO  ca"..., 126 <unfinished ...>
+86593 03:28:24.184536 <... write resumed>) = 111
+86608 03:28:24.184563 <... write resumed>) = 126
+86593 03:28:24.184591 write(5, "\1\0\0\0\0\0\0\0\1\0\0\0\1\0\0\0\0\0\0\0\1\0\0\0\0\0\0\0\2\0\0\0"..., 40 <unfinished ...>
+86608 03:28:24.184621 mq_timedreceive(4,  <unfinished ...>
+86593 03:28:24.184648 <... write resumed>) = 40
+86593 03:28:24.184710 fsync(5)          = 0
+86593 03:28:24.187493 mq_open("reliefos_camp_1", O_WRONLY) = 6
+86593 03:28:24.187779 write(2, "2026-10-26T03:28:24.187 INFO  re"..., 106) = 106
+86593 03:28:24.188059 write(3, "ts=2026-10-26T03:28:24.187 level"..., 122) = 122
+86593 03:28:24.188216 futex(0x634bdec81950, FUTEX_WAKE_PRIVATE, 1) = 1
+86607 03:28:24.188343 <... futex resumed>) = 0
+86593 03:28:24.188384 openat(AT_FDCWD, "$WORK/home/camps.pids.tmp", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666 <unfinished ...>
+86607 03:28:24.188447 futex(0x634bdec81900, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86593 03:28:24.188523 <... openat resumed>) = 7
+86607 03:28:24.188549 <... futex resumed>) = 0
+86607 03:28:24.188635 futex(0x634bdec81954, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86593 03:28:24.188662 fstat(7, {st_mode=S_IFREG|0644, st_size=0, ...}) = 0
+86593 03:28:24.188788 write(7, "# ReliefOS camp table, rewritten"..., 115) = 115
+86593 03:28:24.188918 close(7)          = 0
+86593 03:28:24.189197 mq_timedreceive(4, "\2\0\0\0\1\0\0\0PR\1\0\0\0\0\0BB\17\0\1\0\0\0PR\1\0\0\0\1\0"..., 128, NULL, {tv_sec=1792985304, tv_nsec=689162172}) = 128
+86593 03:28:24.189429 write(2, "2026-10-26T03:28:24.189 INFO  re"..., 224) = 224
+86593 03:28:24.189664 write(3, "ts=2026-10-26T03:28:24.189 level"..., 240) = 240
+86593 03:28:24.189806 futex(0x634bdec7f6f0, FUTEX_WAKE_PRIVATE, 1) = 1
+86596 03:28:24.189923 <... futex resumed>) = 0
+86593 03:28:24.189964 mq_timedreceive(4,  <unfinished ...>
+86596 03:28:24.190181 write(2, "2026-10-26T03:28:24.189 INFO  re"..., 134) = 134
+86596 03:28:24.190416 write(3, "ts=2026-10-26T03:28:24.189 level"..., 150) = 150
+86596 03:28:24.190536 futex(0x634bdec7f6a0, FUTEX_WAKE_PRIVATE, 1) = 0
+86608 03:28:24.204093 <... mq_timedreceive resumed>0x7ffd7c061000, 128, NULL, {tv_sec=1792985304, tv_nsec=204028225}) = -1 ETIMEDOUT (Connection timed out)
+86608 03:28:24.204196 mq_timedsend(3, "\2\0\0\0\1\0\0\0PR\1\0\0\0\0\0CB\17\0\1\0\0\0PR\1\0\1\4\1\0"..., 128, 0, {tv_sec=1792985304, tv_nsec=704156898} <unfinished ...>
+86593 03:28:24.204316 <... mq_timedreceive resumed>"\2\0\0\0\1\0\0\0PR\1\0\0\0\0\0CB\17\0\1\0\0\0PR\1\0\1\4\1\0"..., 128, NULL, {tv_sec=1792985304, tv_nsec=689926564}) = 128
+86608 03:28:24.204362 <... mq_timedsend resumed>) = 0
+86593 03:28:24.204499 write(2, "2026-10-26T03:28:24.204 INFO  re"..., 219) = 219
+86608 03:28:24.204648 write(2, "2026-10-26T03:28:24.204 INFO  ca"..., 123) = 123
+86593 03:28:24.204745 write(3, "ts=2026-10-26T03:28:24.204 level"..., 235 <unfinished ...>
+86608 03:28:24.204789 mq_timedreceive(4,  <unfinished ...>
+86593 03:28:24.204826 <... write resumed>) = 235
+86593 03:28:24.204918 futex(0x634bdec81954, FUTEX_WAKE_PRIVATE, 1) = 1
+86607 03:28:24.205066 <... futex resumed>) = 0
+86593 03:28:24.205107 mq_timedreceive(4,  <unfinished ...>
+86607 03:28:24.205144 write(5, "\2\0\0\0\0\0\0\0\2\0\0\0\1\0\0\0CB\17\0\1\0\0\0\0\0\0\0\0\0\0\0"..., 40) = 40
+86607 03:28:24.205324 fsync(5)          = 0
+86607 03:28:24.207954 mmap(NULL, 134217728, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7ad197a00000
+86607 03:28:24.208092 munmap(0x7ad197a00000, 6291456) = 0
+86607 03:28:24.208212 munmap(0x7ad19c000000, 60817408) = 0
+86607 03:28:24.208328 mprotect(0x7ad198000000, 135168, PROT_READ|PROT_WRITE) = 0
+86607 03:28:24.208451 mq_timedsend(6, "\6\0\0\0\1\0\0\0\0\0\0\0\0\0\0\0CB\17\0\1\0\0\0PR\1\0\1\4\1\0"..., 128, 0, {tv_sec=1792985304, tv_nsec=308424014} <unfinished ...>
+86608 03:28:24.208540 <... mq_timedreceive resumed>"\6\0\0\0\1\0\0\0\0\0\0\0\0\0\0\0CB\17\0\1\0\0\0PR\1\0\1\4\1\0"..., 128, NULL, {tv_sec=1792985304, tv_nsec=224028235}) = 128
+86607 03:28:24.208594 <... mq_timedsend resumed>) = 0
+86608 03:28:24.208728 write(2, "2026-10-26T03:28:24.208 INFO  ca"..., 101 <unfinished ...>
+86607 03:28:24.208771 write(2, "2026-10-26T03:28:24.208 INFO  re"..., 196 <unfinished ...>
+86608 03:28:24.208814 <... write resumed>) = 101
+86607 03:28:24.208851 <... write resumed>) = 196
+86608 03:28:24.208889 mq_timedreceive(4,  <unfinished ...>
+86607 03:28:24.209027 write(3, "ts=2026-10-26T03:28:24.208 level"..., 212) = 212
+86607 03:28:24.209155 futex(0x634bdec81900, FUTEX_WAKE_PRIVATE, 1) = 0
+86607 03:28:24.209265 futex(0x634bdec81950, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86608 03:28:24.224096 <... mq_timedreceive resumed>0x7ffd7c061000, 128, NULL, {tv_sec=1792985304, tv_nsec=224028225}) = -1 ETIMEDOUT (Connection timed out)
+86608 03:28:24.224201 mq_timedsend(3, "\2\0\0\0\1\0\0\0PR\1\0\0\0\0\0DB\17\0\1\0\0\0PR\1\0\2\2\24\0"..., 128, 0, {tv_sec=1792985304, tv_nsec=724159993} <unfinished ...>
+86593 03:28:24.224318 <... mq_timedreceive resumed>"\2\0\0\0\1\0\0\0PR\1\0\0\0\0\0DB\17\0\1\0\0\0PR\1\0\2\2\24\0"..., 128, NULL, {tv_sec=1792985304, tv_nsec=705076585}) = 128
+86608 03:28:24.224363 <... mq_timedsend resumed>) = 0
+86593 03:28:24.224500 write(2, "2026-10-26T03:28:24.224 INFO  re"..., 224) = 224
+86608 03:28:24.224647 write(2, "2026-10-26T03:28:24.224 INFO  ca"..., 127) = 127
+86593 03:28:24.224744 write(3, "ts=2026-10-26T03:28:24.224 level"..., 240 <unfinished ...>
+86608 03:28:24.224788 mq_timedreceive(4,  <unfinished ...>
+86593 03:28:24.224825 <... write resumed>) = 240
+86593 03:28:24.224918 futex(0x634bdec81950, FUTEX_WAKE_PRIVATE, 1) = 1
+86607 03:28:24.225066 <... futex resumed>) = 0
+86593 03:28:24.225107 mq_timedreceive(4,  <unfinished ...>
+86607 03:28:24.225147 write(5, "\3\0\0\0\0\0\0\0\2\0\0\0\1\0\0\0DB\17\0\0\0\0\0\0\0\0\0\2\0\0\0"..., 40) = 40
+86607 03:28:24.225372 fsync(5)          = 0
+86607 03:28:24.228081 mq_timedsend(6, "\6\0\0\0\1\0\0\0\0\0\0\0\0\0\0\0DB\17\0\1\0\0\0PR\1\0\2\2\24\0"..., 128, 0, {tv_sec=1792985304, tv_nsec=328040473} <unfinished ...>
+86608 03:28:24.228201 <... mq_timedreceive resumed>"\6\0\0\0\1\0\0\0\0\0\0\0\0\0\0\0DB\17\0\1\0\0\0PR\1\0\2\2\24\0"..., 128, NULL, {tv_sec=1792985304, tv_nsec=268597319}) = 128
+86607 03:28:24.228246 <... mq_timedsend resumed>) = 0
+86608 03:28:24.228400 write(2, "2026-10-26T03:28:24.228 INFO  ca"..., 103 <unfinished ...>
+86607 03:28:24.228445 write(2, "2026-10-26T03:28:24.228 INFO  re"..., 199 <unfinished ...>
+86608 03:28:24.228488 <... write resumed>) = 103
+86607 03:28:24.228526 <... write resumed>) = 199
+86608 03:28:24.228563 mq_timedreceive(4,  <unfinished ...>
+86607 03:28:24.228783 write(3, "ts=2026-10-26T03:28:24.228 level"..., 215) = 215
+86607 03:28:24.228998 futex(0x634bdec7ff88, FUTEX_WAKE_PRIVATE, 1) = 1
+86601 03:28:24.229115 <... futex resumed>) = 0
+86607 03:28:24.229156 futex(0x634bdec81900, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86601 03:28:24.229195 futex(0x634bdec7ff38, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86607 03:28:24.229234 <... futex resumed>) = 0
+86601 03:28:24.229272 <... futex resumed>) = 0
+86607 03:28:24.229310 futex(0x634bdec81954, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86601 03:28:24.249579 mmap(NULL, 134217728, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7ad190000000
+86601 03:28:24.249766 munmap(0x7ad194000000, 67108864) = 0
+86601 03:28:24.249935 mprotect(0x7ad190000000, 135168, PROT_READ|PROT_WRITE) = 0
+86601 03:28:24.250371 write(2, "2026-10-26T03:28:24.250 INFO  re"..., 147) = 147
+86601 03:28:24.250705 write(3, "ts=2026-10-26T03:28:24.250 level"..., 163) = 163
+86601 03:28:24.250878 futex(0x634bdec7fe98, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86603 03:28:24.250991 <... futex resumed>) = 0
+86601 03:28:24.251029 <... futex resumed>) = 1
+86601 03:28:24.251160 futex(0x634bdec7ff8c, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86603 03:28:24.251213 write(2, "2026-10-26T03:28:24.251 INFO  re"..., 141) = 141
+86603 03:28:24.251442 write(3, "ts=2026-10-26T03:28:24.251 level"..., 157) = 157
+86608 03:28:24.268678 <... mq_timedreceive resumed>0x7ffd7c061000, 128, NULL, {tv_sec=1792985304, tv_nsec=268597310}) = -1 ETIMEDOUT (Connection timed out)
+86608 03:28:24.268790 mq_timedsend(3, "\5\0\0\0\1\0\0\0PR\1\0\0\0\0\0CB\17\0\1\0\0\0PR\1\0\1\4\1\0"..., 128, 0, {tv_sec=1792985304, tv_nsec=768748731} <unfinished ...>
+86593 03:28:24.268914 <... mq_timedreceive resumed>"\5\0\0\0\1\0\0\0PR\1\0\0\0\0\0CB\17\0\1\0\0\0PR\1\0\1\4\1\0"..., 128, NULL, {tv_sec=1792985304, tv_nsec=725079987}) = 128
+86608 03:28:24.268962 <... mq_timedsend resumed>) = 0
+86593 03:28:24.269002 write(5, "\4\0\0\0\0\0\0\0\3\0\0\0\1\0\0\0CB\17\0\1\0\0\0\0\0\0\0\0\0\0\0"..., 40) = 40
+86593 03:28:24.269126 fsync(5 <unfinished ...>
+86608 03:28:24.269165 write(2, "2026-10-26T03:28:24.269 INFO  ca"..., 89) = 89
+86608 03:28:24.269350 mq_timedreceive(4,  <unfinished ...>
+86593 03:28:24.272098 <... fsync resumed>) = 0
+86593 03:28:24.272279 write(2, "2026-10-26T03:28:24.272 INFO  re"..., 138) = 138
+86593 03:28:24.272502 write(3, "ts=2026-10-26T03:28:24.272 level"..., 154) = 154
+86593 03:28:24.272619 futex(0x634bdec81954, FUTEX_WAKE_PRIVATE, 1) = 1
+86607 03:28:24.272733 <... futex resumed>) = 0
+86593 03:28:24.272773 mq_timedreceive(4,  <unfinished ...>
+86607 03:28:24.272810 futex(0x634bdec81900, FUTEX_WAKE_PRIVATE, 1) = 0
+86607 03:28:24.272932 futex(0x634bdec81950, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86596 03:28:24.291831 write(2, "2026-10-26T03:28:24.291 INFO  re"..., 162) = 162
+86596 03:28:24.292105 write(3, "ts=2026-10-26T03:28:24.291 level"..., 178) = 178
+86596 03:28:24.292245 mmap(0x7ad194000000, 67108864, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7ad194000000
+86596 03:28:24.292372 mprotect(0x7ad194000000, 135168, PROT_READ|PROT_WRITE) = 0
+86596 03:28:24.292503 futex(0x634bdec7f6f4, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86608 03:28:24.308321 <... mq_timedreceive resumed>0x7ffd7c061000, 128, NULL, {tv_sec=1792985304, tv_nsec=308258508}) = -1 ETIMEDOUT (Connection timed out)
+86608 03:28:24.308428 mq_timedsend(3, "\5\0\0\0\1\0\0\0PR\1\0\0\0\0\0DB\17\0\1\0\0\0PR\1\0\2\2\24\0"..., 128, 0, {tv_sec=1792985304, tv_nsec=808399610} <unfinished ...>
+86593 03:28:24.308535 <... mq_timedreceive resumed>"\5\0\0\0\1\0\0\0PR\1\0\0\0\0\0DB\17\0\1\0\0\0PR\1\0\2\2\24\0"..., 128, NULL, {tv_sec=1792985304, tv_nsec=772740968}) = 128
+86608 03:28:24.308571 <... mq_timedsend resumed>) = 0
+86593 03:28:24.308598 write(5, "\5\0\0\0\0\0\0\0\3\0\0\0\1\0\0\0DB\17\0\0\0\0\0\0\0\0\0\2\0\0\0"..., 40) = 40
+86593 03:28:24.308714 fsync(5 <unfinished ...>
+86608 03:28:24.308741 write(2, "2026-10-26T03:28:24.308 INFO  ca"..., 91) = 91
+86608 03:28:24.308859 mq_timedreceive(4,  <unfinished ...>
+86593 03:28:24.311189 <... fsync resumed>) = 0
+86593 03:28:24.311356 write(2, "2026-10-26T03:28:24.311 INFO  re"..., 140) = 140
+86593 03:28:24.311636 write(3, "ts=2026-10-26T03:28:24.311 level"..., 156) = 156
+86593 03:28:24.311775 futex(0x634bdec81950, FUTEX_WAKE_PRIVATE, 1) = 1
+86607 03:28:24.311899 <... futex resumed>) = 0
+86593 03:28:24.311927 mq_timedreceive(4,  <unfinished ...>
+86607 03:28:24.311994 futex(0x634bdec81900, FUTEX_WAKE_PRIVATE, 1) = 0
+86607 03:28:24.312111 futex(0x634bdec81954, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86593 03:28:24.346971 <... mq_timedreceive resumed>0x7fffb3e35b20, 128, NULL, {tv_sec=1792985304, tv_nsec=811910064}) = ? ERESTARTSYS (To be restarted if SA_RESTART is set)
+86593 03:28:24.347109 --- SIGTERM {si_signo=SIGTERM, si_code=SI_USER, si_pid=86579, si_uid=1000} ---
+86593 03:28:24.347206 rt_sigreturn({mask=[]}) = -1 EINTR (Interrupted system call)
+86593 03:28:24.347433 write(2, "2026-10-26T03:28:24.347 INFO  re"..., 81) = 81
+86593 03:28:24.347674 write(3, "ts=2026-10-26T03:28:24.347 level"..., 97) = 97
+86593 03:28:24.348097 write(2, "2026-10-26T03:28:24.347 INFO  re"..., 86) = 86
+86593 03:28:24.348331 write(3, "ts=2026-10-26T03:28:24.347 level"..., 102) = 102
+86593 03:28:24.348450 kill(86608, SIGTERM) = 0
+86608 03:28:24.348554 <... mq_timedreceive resumed>0x7ffd7c061000, 128, NULL, {tv_sec=1792985304, tv_nsec=408398767}) = ? ERESTARTSYS (To be restarted if SA_RESTART is set)
+86593 03:28:24.348587 wait4(-1,  <unfinished ...>
+86608 03:28:24.348612 --- SIGTERM {si_signo=SIGTERM, si_code=SI_USER, si_pid=86593, si_uid=1000} ---
+86593 03:28:24.348639 <... wait4 resumed>0x7fffb3e35b8c, WNOHANG, NULL) = 0
+86608 03:28:24.348665 rt_sigreturn({mask=[]} <unfinished ...>
+86593 03:28:24.348694 mq_timedreceive(4,  <unfinished ...>
+86608 03:28:24.348720 <... rt_sigreturn resumed>) = 243
+86608 03:28:24.348778 mq_timedreceive(4,  <unfinished ...>
+86593 03:28:24.398751 <... mq_timedreceive resumed>0x7fffb3e35b20, 128, NULL, {tv_sec=1792985304, tv_nsec=398670380}) = -1 ETIMEDOUT (Connection timed out)
+86593 03:28:24.398887 wait4(-1, 0x7fffb3e35b8c, WNOHANG, NULL) = 0
+86593 03:28:24.399051 mq_timedreceive(4,  <unfinished ...>
+86608 03:28:24.408474 <... mq_timedreceive resumed>0x7ffd7c061000, 128, NULL, {tv_sec=1792985304, tv_nsec=408398767}) = -1 ETIMEDOUT (Connection timed out)
+86608 03:28:24.408581 mq_timedsend(3, "\3\0\0\0\1\0\0\0PR\1\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"..., 128, 0, {tv_sec=1792985304, tv_nsec=908541445} <unfinished ...>
+86593 03:28:24.408705 <... mq_timedreceive resumed>"\3\0\0\0\1\0\0\0PR\1\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"..., 128, NULL, {tv_sec=1792985304, tv_nsec=449011896}) = 128
+86608 03:28:24.408752 <... mq_timedsend resumed>) = 0
+86593 03:28:24.408895 write(2, "2026-10-26T03:28:24.408 INFO  re"..., 77 <unfinished ...>
+86608 03:28:24.408946 write(2, "2026-10-26T03:28:24.408 INFO  ca"..., 94 <unfinished ...>
+86593 03:28:24.409000 <... write resumed>) = 77
+86608 03:28:24.409043 <... write resumed>) = 94
+86593 03:28:24.409185 write(3, "ts=2026-10-26T03:28:24.408 level"..., 93) = 93
+86593 03:28:24.409308 write(5, "\6\0\0\0\0\0\0\0\4\0\0\0\1\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"..., 40 <unfinished ...>
+86608 03:28:24.409353 munmap(0x740a52b1b000, 9136 <unfinished ...>
+86593 03:28:24.409392 <... write resumed>) = 40
+86608 03:28:24.409430 <... munmap resumed>) = 0
+86593 03:28:24.409469 fsync(5 <unfinished ...>
+86608 03:28:24.409508 close(4)          = 0
+86608 03:28:24.409846 close(3)          = 0
+86608 03:28:24.409993 exit_group(0)     = ?
+86608 03:28:24.410296 +++ exited with 0 +++
+86593 03:28:24.412971 <... fsync resumed>) = 0
+86593 03:28:24.413086 --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=86608, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---
+86593 03:28:24.413195 rt_sigreturn({mask=[]}) = 0
+86593 03:28:24.413485 write(2, "2026-10-26T03:28:24.413 INFO  re"..., 142) = 142
+86593 03:28:24.413695 write(3, "ts=2026-10-26T03:28:24.413 level"..., 158) = 158
+86593 03:28:24.413817 futex(0x634bdec81954, FUTEX_WAKE_PRIVATE, 1) = 1
+86607 03:28:24.413949 <... futex resumed>) = 0
+86593 03:28:24.413976 close(6 <unfinished ...>
+86607 03:28:24.414002 futex(0x634bdec81900, FUTEX_WAIT_PRIVATE, 2, NULL <unfinished ...>
+86593 03:28:24.414097 <... close resumed>) = 0
+86593 03:28:24.414230 futex(0x634bdec81900, FUTEX_WAKE_PRIVATE, 1) = 1
+86607 03:28:24.414347 <... futex resumed>) = 0
+86593 03:28:24.414375 wait4(-1,  <unfinished ...>
+86607 03:28:24.414401 futex(0x634bdec81900, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86593 03:28:24.414440 <... wait4 resumed>[{WIFEXITED(s) && WEXITSTATUS(s) == 0}], WNOHANG, NULL) = 86608
+86607 03:28:24.414471 <... futex resumed>) = 0
+86593 03:28:24.414497 futex(0x634bdec81950, FUTEX_WAKE_PRIVATE, 1) = 0
+86607 03:28:24.414569 futex(0x634bdec81900, FUTEX_WAIT_PRIVATE, 2, NULL <unfinished ...>
+86593 03:28:24.414596 futex(0x634bdec81900, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86607 03:28:24.414622 <... futex resumed>) = -1 EAGAIN (Resource temporarily unavailable)
+86593 03:28:24.414649 <... futex resumed>) = 0
+86607 03:28:24.414675 futex(0x634bdec81900, FUTEX_WAKE_PRIVATE, 1) = 0
+86607 03:28:24.414803 futex(0x634bdec81954, FUTEX_WAIT_BITSET_PRIVATE|FUTEX_CLOCK_REALTIME, 0, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86593 03:28:24.414883 write(2, "2026-10-26T03:28:24.414 INFO  re"..., 115) = 115
+86593 03:28:24.415096 write(3, "ts=2026-10-26T03:28:24.414 level"..., 131) = 131
+86593 03:28:24.415228 wait4(-1, 0x7fffb3e35b8c, WNOHANG, NULL) = -1 ECHILD (No child processes)
+86593 03:28:24.415338 wait4(-1, 0x7fffb3e35b8c, 0, NULL) = -1 ECHILD (No child processes)
+86593 03:28:24.415437 mq_timedreceive(4, 0x7fffb3e35b20, 128, NULL, {tv_sec=1792985304, tv_nsec=415411821}) = -1 ETIMEDOUT (Connection timed out)
+86593 03:28:24.415556 futex(0x634bdec7f6f0, FUTEX_WAKE_PRIVATE, 2147483647) = 2
+86598 03:28:24.415680 <... futex resumed>) = 0
+86597 03:28:24.415706 <... futex resumed>) = 0
+86593 03:28:24.415733 futex(0x634bdec7f6d8, FUTEX_WAIT_PRIVATE, 5, NULL <unfinished ...>
+86598 03:28:24.415758 futex(0x634bdec7f6a0, FUTEX_WAIT_PRIVATE, 2, NULL <unfinished ...>
+86593 03:28:24.415785 <... futex resumed>) = -1 EAGAIN (Resource temporarily unavailable)
+86597 03:28:24.415810 futex(0x634bdec7f6d8, FUTEX_WAKE_PRIVATE, 2147483647 <unfinished ...>
+86593 03:28:24.415838 futex(0x634bdec7f6f4, FUTEX_WAKE_PRIVATE, 2147483647 <unfinished ...>
+86597 03:28:24.415864 <... futex resumed>) = 0
+86593 03:28:24.415896 <... futex resumed>) = 1
+86596 03:28:24.415923 <... futex resumed>) = 0
+86597 03:28:24.415947 futex(0x634bdec7f6a0, FUTEX_WAIT_PRIVATE, 2, NULL <unfinished ...>
+86593 03:28:24.415975 futex(0x634bdec7f6a0, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86596 03:28:24.415999 futex(0x634bdec7f6a0, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86593 03:28:24.416030 <... futex resumed>) = 1
+86597 03:28:24.416055 <... futex resumed>) = -1 EAGAIN (Resource temporarily unavailable)
+86593 03:28:24.416090 futex(0x7ad1a53ff990, FUTEX_WAIT_BITSET|FUTEX_CLOCK_REALTIME, 86596, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86598 03:28:24.416115 <... futex resumed>) = 0
+86596 03:28:24.416139 <... futex resumed>) = 0
+86597 03:28:24.416167 futex(0x634bdec7f6a0, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86598 03:28:24.416192 futex(0x634bdec7f6a0, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86597 03:28:24.416229 <... futex resumed>) = 0
+86598 03:28:24.416254 <... futex resumed>) = 0
+86596 03:28:24.416279 rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+86598 03:28:24.416313 rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+86597 03:28:24.416359 rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+86598 03:28:24.416402 <... rt_sigprocmask resumed>NULL, 8) = 0
+86596 03:28:24.416427 <... rt_sigprocmask resumed>NULL, 8) = 0
+86598 03:28:24.416455 madvise(0x7ad1a3bfd000, 8368128, MADV_DONTNEED <unfinished ...>
+86597 03:28:24.416485 <... rt_sigprocmask resumed>NULL, 8) = 0
+86598 03:28:24.416512 <... madvise resumed>) = 0
+86596 03:28:24.416537 madvise(0x7ad1a4bff000, 8368128, MADV_DONTNEED <unfinished ...>
+86598 03:28:24.416564 exit(0 <unfinished ...>
+86597 03:28:24.416589 madvise(0x7ad1a43fe000, 8368128, MADV_DONTNEED <unfinished ...>
+86598 03:28:24.416618 <... exit resumed>) = ?
+86596 03:28:24.416642 <... madvise resumed>) = 0
+86598 03:28:24.416671 +++ exited with 0 +++
+86597 03:28:24.416680 <... madvise resumed>) = 0
+86596 03:28:24.416702 exit(0 <unfinished ...>
+86597 03:28:24.416729 exit(0 <unfinished ...>
+86596 03:28:24.416756 <... exit resumed>) = ?
+86597 03:28:24.416780 <... exit resumed>) = ?
+86593 03:28:24.416860 <... futex resumed>) = 0
+86597 03:28:24.416898 +++ exited with 0 +++
+86596 03:28:24.416910 +++ exited with 0 +++
+86593 03:28:24.416920 futex(0x7ad1a3bfc990, FUTEX_WAIT_BITSET|FUTEX_CLOCK_REALTIME, 86599, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86599 03:28:24.435412 rt_sigprocmask(SIG_BLOCK, ~[RT_1], NULL, 8) = 0
+86599 03:28:24.435589 madvise(0x7ad1a33fc000, 8368128, MADV_DONTNEED) = 0
+86599 03:28:24.435754 exit(0)           = ?
+86593 03:28:24.435947 <... futex resumed>) = 0
+86599 03:28:24.435985 +++ exited with 0 +++
+86593 03:28:24.436186 write(2, "2026-10-26T03:28:24.435 INFO  re"..., 148) = 148
+86593 03:28:24.436512 write(3, "ts=2026-10-26T03:28:24.435 level"..., 164) = 164
+86593 03:28:24.436689 futex(0x634bdec81954, FUTEX_WAKE_PRIVATE, 2147483647) = 1
+86607 03:28:24.436839 <... futex resumed>) = 0
+86593 03:28:24.436880 futex(0x7ad1a03f5990, FUTEX_WAIT_BITSET|FUTEX_CLOCK_REALTIME, 86607, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86607 03:28:24.436919 futex(0x634bdec81900, FUTEX_WAKE_PRIVATE, 1) = 0
+86607 03:28:24.437090 rt_sigprocmask(SIG_BLOCK, ~[RT_1], NULL, 8) = 0
+86607 03:28:24.437231 madvise(0x7ad19fbf5000, 8368128, MADV_DONTNEED) = 0
+86607 03:28:24.437340 exit(0)           = ?
+86593 03:28:24.437490 <... futex resumed>) = 0
+86607 03:28:24.437530 +++ exited with 0 +++
+86593 03:28:24.437556 munmap(0x7ad1a4bff000, 8392704) = 0
+86593 03:28:24.437715 openat(AT_FDCWD, "$WORK/home/snapshot.tmp", O_WRONLY|O_CREAT|O_TRUNC, 0640) = 6
+86593 03:28:24.437865 write(6, "\6\0\0\0\0\0\0\0\5\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"..., 40) = 40
+86593 03:28:24.437986 fsync(6)          = 0
+86593 03:28:24.440684 close(6)          = 0
+86593 03:28:24.440925 openat(AT_FDCWD, "$WORK/home", O_RDONLY|O_DIRECTORY) = 6
+86593 03:28:24.441070 fsync(6)          = 0
+86593 03:28:24.443234 ftruncate(5, 0)   = 0
+86593 03:28:24.443374 fsync(5)          = 0
+86593 03:28:24.445486 close(6)          = 0
+86593 03:28:24.445699 write(2, "2026-10-26T03:28:24.445 INFO  re"..., 112) = 112
+86593 03:28:24.445910 write(3, "ts=2026-10-26T03:28:24.445 level"..., 128) = 128
+86593 03:28:24.446031 close(5)          = 0
+86593 03:28:24.446344 write(2, "2026-10-26T03:28:24.446 INFO  re"..., 156) = 156
+86593 03:28:24.446556 write(3, "ts=2026-10-26T03:28:24.446 level"..., 172) = 172
+86593 03:28:24.446769 write(2, "2026-10-26T03:28:24.446 INFO  re"..., 193) = 193
+86593 03:28:24.446982 write(3, "ts=2026-10-26T03:28:24.446 level"..., 209) = 209
+86593 03:28:24.447095 futex(0x634bdec7ff88, FUTEX_WAKE_PRIVATE, 2147483647) = 1
+86602 03:28:24.447206 <... futex resumed>) = 0
+86593 03:28:24.447245 futex(0x634bdec7ff70, FUTEX_WAIT_PRIVATE, 3, NULL <unfinished ...>
+86602 03:28:24.447284 futex(0x634bdec7ff70, FUTEX_WAKE_PRIVATE, 2147483647 <unfinished ...>
+86593 03:28:24.447321 <... futex resumed>) = -1 EAGAIN (Resource temporarily unavailable)
+86602 03:28:24.447360 <... futex resumed>) = 0
+86593 03:28:24.447398 futex(0x634bdec7ff8c, FUTEX_WAKE_PRIVATE, 2147483647 <unfinished ...>
+86602 03:28:24.447435 futex(0x634bdec7ff38, FUTEX_WAIT_PRIVATE, 2, NULL <unfinished ...>
+86593 03:28:24.447474 <... futex resumed>) = 1
+86601 03:28:24.447509 <... futex resumed>) = 0
+86593 03:28:24.447546 futex(0x634bdec7ff38, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86601 03:28:24.447584 futex(0x634bdec7ff38, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86593 03:28:24.447625 <... futex resumed>) = 1
+86602 03:28:24.447660 <... futex resumed>) = 0
+86593 03:28:24.447698 futex(0x7ad1a33fb990, FUTEX_WAIT_BITSET|FUTEX_CLOCK_REALTIME, 86601, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86601 03:28:24.447733 <... futex resumed>) = 0
+86602 03:28:24.447771 futex(0x634bdec7ff38, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86601 03:28:24.447808 rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+86602 03:28:24.447852 <... futex resumed>) = 0
+86601 03:28:24.447894 <... rt_sigprocmask resumed>NULL, 8) = 0
+86602 03:28:24.447935 rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+86601 03:28:24.448017 madvise(0x7ad1a2bfb000, 8368128, MADV_DONTNEED <unfinished ...>
+86602 03:28:24.448066 <... rt_sigprocmask resumed>NULL, 8) = 0
+86601 03:28:24.448113 <... madvise resumed>) = 0
+86602 03:28:24.448154 madvise(0x7ad1a23fa000, 8368128, MADV_DONTNEED <unfinished ...>
+86601 03:28:24.448192 exit(0 <unfinished ...>
+86602 03:28:24.448229 <... madvise resumed>) = 0
+86601 03:28:24.448265 <... exit resumed>) = ?
+86602 03:28:24.448303 exit(0 <unfinished ...>
+86593 03:28:24.448344 <... futex resumed>) = 0
+86601 03:28:24.448377 +++ exited with 0 +++
+86593 03:28:24.448394 munmap(0x7ad1a43fe000, 8392704 <unfinished ...>
+86602 03:28:24.448425 <... exit resumed>) = ?
+86593 03:28:24.448460 <... munmap resumed>) = 0
+86602 03:28:24.448499 +++ exited with 0 +++
+86593 03:28:24.448513 munmap(0x7ad1a3bfd000, 8392704) = 0
+86593 03:28:24.448642 futex(0x634bdec7fe98, FUTEX_WAKE_PRIVATE, 1) = 1
+86604 03:28:24.448756 <... futex resumed>) = 0
+86593 03:28:24.448795 futex(0x634bdec7fe98, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86604 03:28:24.448834 rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+86593 03:28:24.448878 <... futex resumed>) = 1
+86605 03:28:24.448914 <... futex resumed>) = 0
+86593 03:28:24.448953 futex(0x634bdec7fe98, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86604 03:28:24.448988 <... rt_sigprocmask resumed>NULL, 8) = 0
+86593 03:28:24.449028 <... futex resumed>) = 1
+86606 03:28:24.449063 <... futex resumed>) = 0
+86605 03:28:24.449099 rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+86593 03:28:24.449143 futex(0x634bdec7fe98, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+86606 03:28:24.449179 rt_sigprocmask(SIG_BLOCK, ~[RT_1],  <unfinished ...>
+86604 03:28:24.449219 madvise(0x7ad1a13f8000, 8368128, MADV_DONTNEED <unfinished ...>
+86593 03:28:24.449259 <... futex resumed>) = 0
+86606 03:28:24.449294 <... rt_sigprocmask resumed>NULL, 8) = 0
+86605 03:28:24.449329 <... rt_sigprocmask resumed>NULL, 8) = 0
+86593 03:28:24.449368 futex(0x7ad1a23f9990, FUTEX_WAIT_BITSET|FUTEX_CLOCK_REALTIME, 86603, NULL, FUTEX_BITSET_MATCH_ANY <unfinished ...>
+86606 03:28:24.449404 madvise(0x7ad1a03f6000, 8368128, MADV_DONTNEED <unfinished ...>
+86604 03:28:24.449440 <... madvise resumed>) = 0
+86606 03:28:24.449478 <... madvise resumed>) = 0
+86605 03:28:24.449513 madvise(0x7ad1a0bf7000, 8368128, MADV_DONTNEED <unfinished ...>
+86606 03:28:24.449551 exit(0 <unfinished ...>
+86604 03:28:24.449586 exit(0 <unfinished ...>
+86606 03:28:24.449627 <... exit resumed>) = ?
+86605 03:28:24.449660 <... madvise resumed>) = 0
+86606 03:28:24.449707 +++ exited with 0 +++
+86604 03:28:24.449719 <... exit resumed>) = ?
+86605 03:28:24.449750 exit(0 <unfinished ...>
+86604 03:28:24.449791 +++ exited with 0 +++
+86605 03:28:24.449802 <... exit resumed>) = ?
+86605 03:28:24.449869 +++ exited with 0 +++
+86603 03:28:24.452548 write(2, "2026-10-26T03:28:24.452 INFO  re"..., 107) = 107
+86603 03:28:24.452822 write(3, "ts=2026-10-26T03:28:24.452 level"..., 123) = 123
+86603 03:28:24.452973 rt_sigprocmask(SIG_BLOCK, ~[RT_1], NULL, 8) = 0
+86603 03:28:24.453115 madvise(0x7ad1a1bf9000, 8368128, MADV_DONTNEED) = 0
+86603 03:28:24.453253 exit(0)           = ?
+86593 03:28:24.453409 <... futex resumed>) = 0
+86603 03:28:24.453445 +++ exited with 0 +++
+86593 03:28:24.453461 munmap(0x7ad1a33fc000, 8392704) = 0
+86593 03:28:24.453601 munmap(0x7ad19fbf5000, 8392704) = 0
+86593 03:28:24.453727 munmap(0x7ad1a2bfb000, 8392704) = 0
+86593 03:28:24.453847 munmap(0x7ad1a23fa000, 8392704) = 0
+86593 03:28:24.454192 write(2, "2026-10-26T03:28:24.453 INFO  re"..., 230) = 230
+86593 03:28:24.454453 write(3, "ts=2026-10-26T03:28:24.453 level"..., 246) = 246
+86593 03:28:24.454721 write(2, "2026-10-26T03:28:24.454 INFO  re"..., 107) = 107
+86593 03:28:24.454938 write(3, "ts=2026-10-26T03:28:24.454 level"..., 123) = 123
+86593 03:28:24.455158 write(2, "2026-10-26T03:28:24.455 INFO  re"..., 87) = 87
+86593 03:28:24.455427 write(3, "ts=2026-10-26T03:28:24.455 level"..., 103) = 103
+86593 03:28:24.455557 munmap(0x7ad1a56da000, 9136) = 0
+86593 03:28:24.455794 close(4)          = 0
+86593 03:28:24.456227 write(2, "2026-10-26T03:28:24.456 INFO  re"..., 68) = 68
+86593 03:28:24.456444 write(3, "ts=2026-10-26T03:28:24.456 level"..., 84) = 84
+86593 03:28:24.456564 close(3)          = 0
+86593 03:28:24.456683 exit_group(0)     = ?
+86593 03:28:24.456932 +++ exited with 0 +++

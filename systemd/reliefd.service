@@ -1,7 +1,22 @@
 # OS concept: System boot and service management with systemd — Unit 6
 #
-# TEMPLATE ONLY — not installed. Phase 6 replaces @RELIEF_PREFIX@ with the
-# install path and installs this to /etc/systemd/system/ in the test VM.
+# Where this unit sits in the Linux boot sequence:
+#   1. firmware (BIOS/UEFI): power-on self test, finds the boot device
+#   2. bootloader (GRUB): loads the kernel image and the initramfs into memory
+#   3. kernel: sets up memory, the scheduler and drivers, mounts the root file system, then
+#      starts the first user-space process, PID 1
+#   4. init = systemd (PID 1): reads its unit files and starts them in dependency order, in
+#      parallel where it can, towards a target such as multi-user.target
+#   5. services: this unit is pulled in by multi-user.target (WantedBy below), after the local
+#      file systems are mounted (After=local-fs.target), and systemd keeps supervising it:
+#      it restarts reliefd 2 s after a crash (Restart=on-failure), as reliefd itself restarts
+#      its crashed camps
+# On WSL2, step 1-2 are replaced by Windows starting the WSL VM and its kernel directly; from
+# step 4 on it is the same (wsl.conf: [boot] systemd=true).
+#
+# TEMPLATE: scripts/install_service.sh replaces @RELIEF_PREFIX@ (the project directory) and
+# @RELIEF_USER@ (who runs reliefd), installs it to /etc/systemd/system/ and starts it.
+# scripts/uninstall_service.sh removes it.
 
 [Unit]
 Description=ReliefOS disaster-relief coordinator daemon
@@ -10,15 +25,21 @@ After=local-fs.target
 
 [Service]
 Type=simple
+User=@RELIEF_USER@
+Group=relief-admin
+WorkingDirectory=@RELIEF_PREFIX@
 ExecStart=@RELIEF_PREFIX@/build/reliefd \
     --camps @RELIEF_PREFIX@/scenarios/camps.conf \
     --scenario @RELIEF_PREFIX@/scenarios/flood_pune.csv
-# reliefd stops its camps itself (SIGTERM, 2 s grace, SIGKILL): only signal the main process.
-KillMode=mixed
-Environment=RELIEF_HOME=/var/lib/reliefos
+# The dedicated directory: systemd creates /var/lib/reliefos owned by User/Group before start.
+# A state directory (not /run) so the Banker's journal survives a restart and even a reboot:
+# after a crash the restarted reliefd logs event=recovered.
 StateDirectory=reliefos
-Group=relief-admin
+StateDirectoryMode=0770
+Environment=RELIEF_HOME=/var/lib/reliefos
 UMask=0007
+# reliefd stops its camps itself (SIGTERM, 2 s grace, SIGKILL): SIGTERM the main process first.
+KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=10
 Restart=on-failure

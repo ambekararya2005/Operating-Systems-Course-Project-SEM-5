@@ -284,6 +284,19 @@ and `logs/reliefd.out` (raw stderr). You never need root.
 Exit codes: 0 success, 1 runtime error (e.g. reliefd not running), 2 usage error. Long options such as
 `--camps=8` are translated to short ones and parsed with `getopts`.
 
+### systemd service and strace (Phase 6)
+```sh
+scripts/install_service.sh -n      # print the sudo commands only; without -n it runs them (you type the password)
+systemctl status reliefd           # running as a service, RELIEF_HOME=/var/lib/reliefos
+journalctl -u reliefd -n 20        # reliefd's stderr, captured by journald
+sudo kill -9 "$(systemctl show -p MainPID --value reliefd)"   # systemd restarts it 2 s later; the journal recovers
+scripts/uninstall_service.sh [-p]  # remove it (-p: also /var/lib/reliefos and the relief-admin group)
+scripts/trace_request.sh           # 1 camp, 3 requests under strace -> docs/strace_request.txt, docs/SYSCALLS.md
+```
+The boot sequence (firmware → bootloader → kernel → systemd → this service) is described in
+`systemd/reliefd.service`. The user/kernel boundary, and the `/proc/relief` module and Android
+client (both design only), are in `docs/KERNEL.md`.
+
 ### Cron: stockcheck
 `scripts/stockcheck.sh [-t THRESHOLD] [-w WINDOW_MIN] [-q]` counts requests logged in the last window and
 warns (stderr, `logs/stockcheck.log`, exit 1) above the threshold. It is not installed automatically. To
@@ -314,7 +327,7 @@ run it every 10 minutes, add this with `crontab -e`:
 | 5 | FCFS/SSTF/SCAN/C-SCAN/LIFO disk scheduling | `build/routesim` (`src/io/`): delivery routing along one highway, ASCII track diagram; experiment E8 | 5 |
 | 5 | Journaling, crash recovery | Write-ahead journal of the Banker's allocations: fsync, snapshot by atomic rename, replay (`src/io/journal.c`); experiment E9 | 5 |
 | 5 | Directory tree, permissions | Per-role access (next step) | 5 |
-| 6 | User vs kernel space, system calls, boot services | `/proc/relief`, strace of a request, systemd unit, Termux client | 6 |
+| 6 | User vs kernel space, system calls, boot services | `systemd/reliefd.service` + `scripts/install_service.sh`; `scripts/trace_request.sh` → `docs/SYSCALLS.md`; `docs/KERNEL.md` (`/proc` reads, signals; `/proc/relief` module and Android client as design only) | 6 |
 
 Roles (`relief-admin`, `relief-officer`, `relief-volunteer`) are enforced as Linux groups.
 
