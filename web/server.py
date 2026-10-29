@@ -6,7 +6,11 @@ status table via reliefstat), process control (reliefctl -> signals), a threaded
 web/server.py: the ReliefOS web dashboard. Python standard library only (http.server +
 threading), no internet, bound to 127.0.0.1 only.
 
-    python3 web/server.py [--port 8080]          (or: scripts/reliefctl web)
+    python3 web/server.py [--port 8080] [--public]   (or: scripts/reliefctl web [--public])
+
+--public: for sharing through a tunnel (e.g. cloudflared). Any Host is answered, but only a
+request made on this machine (Host 127.0.0.1/localhost, no proxy headers) may control ReliefOS.
+Everyone else gets a read-only view: POST /api/action is refused and the buttons are disabled.
 
 Endpoints:
   GET  /                    web/index.html (one file, inline CSS/JS, no CDN)
@@ -16,6 +20,8 @@ Endpoints:
   POST /api/action          {"cmd": "start|stop|alert|dump|simulate", "camp": N|"all"}
                             runs scripts/reliefctl with a fixed argument list (never a shell);
                             simulate runs `reliefctl simulate flood` in the background
+  GET  /api/log?pos=N      the same log lines by polling: {"pos": next N, "events": [...]}, for
+                            viewers behind a quick tunnel (cloudflared quick tunnels drop SSE)
   GET  /api/job             the background simulation: running, return code, output tail
   GET  /api/experiments     the figures of docs/EXPERIMENTS.md with their captions
   GET  /figures/<path>.png  a PNG under docs/figures (nothing else on disk is served)
@@ -37,7 +43,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 BIN = Path(os.environ.get("RELIEF_BIN_DIR") or ROOT / "build")
@@ -130,9 +136,18 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):      # quiet: errors only
         pass
 
-    def allowed_host(self):
+    PROXY_HEADERS = ("Cf-Connecting-Ip", "Cf-Ray", "X-Forwarded-For", "X-Forwarded-Host", "Forwarded")
+
+    def is_local(self):
+        """A request made on this machine: a local Host and no header a tunnel or proxy adds."""
         port = self.server.server_address[1]
-        return self.headers.get("Host", "") in (f"127.0.0.1:{port}", f"localhost:{port}")
+        if self.headers.get("Host", "") not in (f"127.0.0.1:{port}", f"localhost:{port}"):
+            return False
+        return not any(self.headers.get(h) for h in self.PROXY_HEADERS)
+
+    def allowed_host(self):
+        # --public: anyone may look (read-only); otherwise only this machine (no DNS rebinding).
+        return self.server.public or self.is_local()
 
     def send(self, code, body, ctype="application/json", extra=None):
         data = body if isinstance(body, bytes) else json.dumps(body).encode()
@@ -163,6 +178,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.status()
         if path == "/api/events":
             return self.events()
+        if path == "/api/log":
+            return self.log_poll()
         if path == "/api/job":
             return self.send(200, Job.snapshot())
         if path == "/api/experiments":
@@ -185,7 +202,40 @@ class Handler(BaseHTTPRequestHandler):
         for camp in data.get("camps", []):
             camp["proc_state"] = proc_state(camp.get("pid", 0)) if camp.get("state") in ("RUNNING", "STARTING") else "-"
         data["job_running"] = Job.snapshot()["running"]
+        data["readonly"] = not self.is_local()
         return self.send(200, data)
+
+    def log_poll(self):
+        """Polling twin of events(): the log lines written since byte offset pos."""
+        log = HOME / "logs" / "reliefd.log"
+        q = parse_qs(urlparse(self.path).query)
+        try:
+            pos = int(q["pos"][0]) if "pos" in q else -1
+        except ValueError:
+            return self.send(400, {"error": "pos must be an integer"})
+        try:
+            size = log.stat().st_size
+        except OSError:
+            return self.send(200, {"pos": 0, "events": []})
+        if pos > size:                              # a new run truncated or replaced the log
+            pos = 0
+        first = pos < 0
+        start = max(0, size - 16384) if first else pos
+        with open(log, "rb") as f:
+            f.seek(start)
+            chunk = f.read(min(size - start, 65536))
+        lines = chunk.split(b"\n")
+        tail = lines.pop()                          # an unfinished last line waits for next time
+        if first and start > 0:
+            lines = lines[1:]                       # we started mid-line
+        if first:
+            lines = lines[-LOG_TAIL:]
+        events = []
+        for raw in lines:
+            line = raw.decode("utf-8", "replace").rstrip("\r")
+            if line:
+                events.append(parse_log_line(line))
+        return self.send(200, {"pos": start + len(chunk) - len(tail), "events": events})
 
     def events(self):
         """Server-Sent Events: tail reliefd.log, one JSON object per line."""
@@ -244,6 +294,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.allowed_host():
             return self.send(403, {"error": "forbidden host"})
+        if not self.is_local():
+            return self.send(403, {"ok": False, "error": "view only: ReliefOS is controlled from the presenter's machine"})
         port = self.server.server_address[1]
         origin = self.headers.get("Origin")
         if origin is not None and origin not in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
@@ -297,11 +349,14 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
     stopping = False
+    public = False
 
 
 def main():
     ap = argparse.ArgumentParser(description="ReliefOS web dashboard (127.0.0.1 only).")
     ap.add_argument("--port", type=int, default=8080)
+    ap.add_argument("--public", action="store_true",
+                    help="answer any Host (for a tunnel); remote viewers are read-only")
     args = ap.parse_args()
     if not 1 <= args.port <= 65535:
         ap.error("--port must be 1-65535")
@@ -310,8 +365,12 @@ def main():
     except OSError as e:
         print(f"reliefos web: cannot listen on 127.0.0.1:{args.port}: {e.strerror}", file=sys.stderr)
         return 1
+    srv.public = args.public
     print(f"ReliefOS web dashboard: http://127.0.0.1:{args.port}/   (Ctrl-C to stop)", flush=True)
     print(f"  RELIEF_HOME={HOME}  binaries={BIN}", flush=True)
+    if args.public:
+        print("  --public: any Host is served; remote viewers are read-only, control stays on this machine",
+              flush=True)
     try:
         srv.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:

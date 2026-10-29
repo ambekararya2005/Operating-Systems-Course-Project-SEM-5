@@ -9,6 +9,9 @@
 #      a non-JSON POST, a foreign Origin and a foreign Host are all refused, and nothing ran
 #   4. /api/experiments lists the figures of EXPERIMENTS.md; /figures/... serves them; paths
 #      outside docs/figures are refused; POST {"cmd":"stop"} stops ReliefOS
+#   5. --public (sharing through a tunnel): any Host may look, a tunnelled request (foreign Host or
+#      a proxy header) is read-only (readonly=true, POST 403), this machine keeps control, and
+#      /api/log serves the log by polling (quick tunnels drop SSE)
 #   BIN_DIR       directory holding the binaries (default: build)
 #   RELIEF_WRAP   optional command prefix for reliefd/reliefstat, e.g. valgrind
 #   TEST_TIMEOUT  seconds to wait for each condition (default 10)
@@ -97,5 +100,31 @@ src=$(curl -s "$U/api/experiments" | json 'd[0]["src"]')
 [[ $(post '{"cmd":"stop"}' | json 'd["ok"]') == True ]] || fail "POST stop"
 [[ $(curl -s "$U/api/status" | json 'd["running"]') == False ]] || fail "status after stop"
 pass "$n experiment figures served (traversal refused); stop via POST"
+
+# 5. --public: remote viewers are read-only.
+kill "$SPID" 2>/dev/null || true
+wait "$SPID" 2>/dev/null || true
+"$CTL" web --public --port "$PORT" > "$RELIEF_HOME/web.out" 2>&1 &
+SPID=$!
+wait_for "the --public server's URL line" grep -q "http://127.0.0.1:$PORT/" "$RELIEF_HOME/web.out"
+T=(-H "Host: demo.trycloudflare.com")
+[[ $(curl -s "${T[@]}" "$U/api/status" | json 'd["readonly"]') == True ]] || fail "a tunnel viewer should be read-only"
+[[ $(curl -s "$U/api/status" | json 'd["readonly"]') == False ]] || fail "this machine should keep control"
+[[ $(curl -s -o /dev/null -w "%{http_code}" "${T[@]}" -X POST -H "Content-Type: application/json" -d '{"cmd":"start"}' "$U/api/action") == 403 ]] \
+    || fail "a tunnel viewer's POST should be 403"
+[[ $(curl -s -o /dev/null -w "%{http_code}" -H "Cf-Connecting-Ip: 203.0.113.9" -X POST -H "Content-Type: application/json" -d '{"cmd":"start"}' "$U/api/action") == 403 ]] \
+    || fail "a local Host with a tunnel header should still be 403"
+[[ $(curl -s "$U/api/status" | json 'd["running"]') == False ]] || fail "a read-only POST must not start ReliefOS"
+[[ $(post '{"cmd":"start"}' | json 'd["ok"]') == True ]] || fail "POST start from this machine (--public)"
+wait_for "8 RUNNING camps (--public)" running8
+lg=$(curl -s "${T[@]}" "$U/api/log")
+[[ $(json 'len(d["events"]) >= 1 and d["pos"] > 0 and "event" in d["events"][0]' <<< "$lg") == True ]] || fail "/api/log first poll: $lg"
+pos=$(json 'd["pos"]' <<< "$lg")
+"$CTL" dump all >/dev/null
+more() { [[ $(curl -s "${T[@]}" "$U/api/log?pos=$pos" | json 'len(d["events"])') -ge 1 ]]; }
+wait_for "new lines from /api/log?pos=" more
+[[ $(code "${T[@]}" "$U$src") == 200 ]] || fail "a tunnel viewer should see the figures"
+[[ $(post '{"cmd":"stop"}' | json 'd["ok"]') == True ]] || fail "POST stop (--public)"
+pass "--public: tunnel viewers read-only (POST 403), this machine controls, /api/log polls new lines"
 
 echo "all web tests passed"

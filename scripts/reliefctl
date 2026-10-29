@@ -49,8 +49,10 @@ commands:
   sched [--json]        live scheduler: policy, ready queue per level, what each team works on
   banker [--json]       Banker's algorithm: Allocation, Max, Need and Available per camp, and a
                         safe sequence of the current state (from shared memory)
-  web [--port N]        local web dashboard on http://127.0.0.1:N/ (default 8080; web/server.py,
-                        Python standard library only, offline); Ctrl-C stops it
+  web [--port N] [--public]
+                        local web dashboard on http://127.0.0.1:N/ (default 8080; web/server.py,
+                        Python standard library only, offline); Ctrl-C stops it. --public: for a
+                        tunnel (cloudflared); remote viewers get a read-only view
   ui                    live ncurses dashboard (build/reliefui): camps, scheduler, Banker's
                         resources, dock, events; keys q p a d k s ? (works before start too)
   waitfor [--dot]       the wait-for graph: "campX -> campY [RESOURCE]" edges and any cycle;
@@ -553,13 +555,14 @@ cmd_banker() {
 }
 
 cmd_web() {
-    local opt port=8080
-    long_to_short "port=p" "$@"
+    local opt port=8080 public=()
+    long_to_short "port=p public=P" "$@"
     set -- "${ARGS[@]+"${ARGS[@]}"}"
     local OPTIND=1
-    while getopts ":p:" opt; do
+    while getopts ":p:P" opt; do
         case "$opt" in
             p) port=$OPTARG ;;
+            P) public=(--public) ;;
             :) usage_err "web: -$OPTARG needs a value" ;;
             *) usage_err "web: unknown option -$OPTARG" ;;
         esac
@@ -571,7 +574,7 @@ cmd_web() {
     fi
     [[ -x "$BIN_DIR/reliefstat" ]] || die "reliefstat not built; run 'make' first"
     command -v python3 >/dev/null || die "python3 not found"
-    RELIEF_BIN_DIR="$BIN_DIR" exec python3 -I "$ROOT/web/server.py" --port "$port"
+    RELIEF_BIN_DIR="$BIN_DIR" exec python3 -I "$ROOT/web/server.py" --port "$port" "${public[@]+"${public[@]}"}"
 }
 
 cmd_ui() {

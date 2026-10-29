@@ -279,6 +279,18 @@ localhost is forwarded.
   - actions go through an allow-list to `reliefctl` as an argument list, never a shell;
   - requests with a foreign Host or Origin, or a POST that is not JSON, are refused.
 
+#### Sharing it for a review (Cloudflare quick tunnel)
+`--public` lets remote viewers watch through a tunnel. They get a **read-only** live view: the buttons
+are disabled and `POST /api/action` returns 403. Control stays on this machine (Host 127.0.0.1/localhost
+and no proxy header such as `Cf-Connecting-Ip`). Quick tunnels drop Server-Sent Events, so remote
+viewers poll `GET /api/log?pos=N` every second instead.
+```sh
+scripts/reliefctl web --public                     # terminal 1
+cloudflared tunnel --url http://localhost:8080     # terminal 2: share the https://...trycloudflare.com link
+scripts/reliefctl start                            # terminal 3, or use http://127.0.0.1:8080 as the control panel
+```
+The link changes on every run of `cloudflared`. To stop: `scripts/reliefctl stop`, then Ctrl-C terminals 1 and 2.
+
 ### Deadlock: none, prevent, detect
 `scenarios/deadlock.csv` is a reproducible circular wait: camps 1 and 2 each hold a truck and a boat and ask
 for the other's. Rows sharing the optional 7th CSV column (`task`) are acquired one after another and held
@@ -317,7 +329,7 @@ and `logs/reliefd.out` (raw stderr). You never need root.
 | `stop`     | Stops reliefd with SIGTERM. reliefd stops and reaps every camp |
 | `status [--json]` | Shows whether reliefd is running, then the live camp table from shared memory (`reliefstat`): pid, state, requests sent, heartbeat, restarts |
 | `sched [--json]` | Live scheduler: policy, ready queue per level, and what each rescue team is working on |
-| `web [--port N]` | Local web dashboard on http://127.0.0.1:N/ (default 8080), offline, Ctrl-C stops it |
+| `web [--port N] [--public]` | Local web dashboard on http://127.0.0.1:N/ (default 8080), offline, Ctrl-C stops it; `--public`: share through a tunnel, remote viewers read-only |
 | `ui` | Live ncurses dashboard (`build/reliefui`); keys `q p a d k s ?`; works before `start` too |
 | `waitfor [--dot]` | Wait-for graph: `campX -> campY [RESOURCE]` edges and any cycle; `--dot` prints Graphviz DOT |
 | `banker [--json]` | Banker's algorithm in textbook layout: Allocation, Max, Need and Available per camp, and a safe sequence of the current state |

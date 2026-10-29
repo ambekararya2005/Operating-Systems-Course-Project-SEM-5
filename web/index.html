@@ -166,6 +166,7 @@ figcaption { color: #52514e; font-size: 13px; margin-top: 6px; }
           <span style="width:10px"></span>
           <button class="btn" id="b-sim" title="reliefctl simulate flood: start, run until every camp is done, stop, report">Run flood simulation</button>
         </div>
+        <div id="controlhint" style="display:none;margin-top:6px;opacity:.75">View only: the controls work on the presenter's machine. Everything below is live.</div>
         <div id="msg" role="status" aria-live="polite"></div>
       </div>
 
@@ -285,10 +286,16 @@ function render() {
   $("rundot").style.background = running ? css("--good") : css("--critical");
   $("runtext").textContent = running ? `running · pid ${s.daemon_pid}` : (s.error ? s.error : "not running");
   $("banner").style.display = running ? "none" : "flex";
-  $("b-start").disabled = running || s.job_running;
-  $("b-stop").disabled = !running || s.job_running;
-  $("b-alert").disabled = $("b-dump").disabled = !running;
-  $("b-sim").disabled = running || s.job_running;
+  const ro = !!s.readonly;               /* a viewer through the tunnel: look, don't touch */
+  $("b-start").disabled = ro || running || s.job_running;
+  $("b-stop").disabled = ro || !running || s.job_running;
+  $("b-alert").disabled = $("b-dump").disabled = ro || !running;
+  $("b-sim").disabled = ro || running || s.job_running;
+  $("campsel").disabled = ro;
+  if (ro) {
+    $("controlhint").style.display = "block";
+    $("banner").innerHTML = "<b>ReliefOS is not running yet.</b> The presenter will start it shortly; this page updates by itself.";
+  }
 
   const meta = $("meta");
   meta.replaceChildren();
@@ -455,6 +462,17 @@ function addEvent(e) {
     el("span", { class: "ev" }, dot(color), e.event || e.level), el("span", { class: "rest" }, rest)));
   while (feed.children.length > 200) feed.lastChild.remove();
 }
+/* Viewers behind a cloudflared quick tunnel poll instead: quick tunnels do not carry SSE. */
+let logPos = null;
+async function pollEvents() {
+  try {
+    const r = await fetch("/api/log" + (logPos === null ? "" : "?pos=" + logPos), { cache: "no-store" });
+    const j = await r.json();
+    for (const e of j.events || []) addEvent(e);
+    if (typeof j.pos === "number") logPos = j.pos;
+  } catch (err) { /* try again on the next tick */ }
+  setTimeout(pollEvents, 1000);
+}
 function connectEvents() {
   const es = new EventSource("/api/events");
   es.onmessage = (m) => { try { addEvent(JSON.parse(m.data)); } catch (err) { /* ignore a bad line */ } };
@@ -512,9 +530,8 @@ async function loadExperiments() {
   }
 }
 
-poll();
+poll().then(() => (status && status.readonly) ? pollEvents() : connectEvents());
 setInterval(poll, 1000);
-connectEvents();
 </script>
 </body>
 </html>
